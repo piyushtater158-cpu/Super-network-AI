@@ -466,9 +466,11 @@ async def create_opportunity(opp_data: OpportunityCreate, user: User = Depends(g
     opp_dict = opp.model_dump()
     opp_dict["created_at"] = opp_dict["created_at"].isoformat()
     
-    await db.opportunities.insert_one(opp_dict)
+    # Insert and get back without _id
+    await db.opportunities.insert_one(opp_dict.copy())
     
-    return opp_dict
+    # Return clean dict (without _id that MongoDB adds)
+    return {k: v for k, v in opp_dict.items() if k != "_id"}
 
 @api_router.get("/opportunities")
 async def list_opportunities(
