@@ -563,7 +563,7 @@ async def apply_to_opportunity(opportunity_id: str, app_data: ApplicationCreate,
     app_dict = application.model_dump()
     app_dict["created_at"] = app_dict["created_at"].isoformat()
     
-    await db.applications.insert_one(app_dict)
+    await db.applications.insert_one(app_dict.copy())
     
     # Update applications count
     await db.opportunities.update_one(
@@ -571,7 +571,8 @@ async def apply_to_opportunity(opportunity_id: str, app_data: ApplicationCreate,
         {"$inc": {"applications_count": 1}}
     )
     
-    return app_dict
+    # Return clean dict without _id
+    return {k: v for k, v in app_dict.items() if k != "_id"}
 
 # ==================== SEARCH ENDPOINTS ====================
 
