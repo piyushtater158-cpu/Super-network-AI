@@ -625,8 +625,9 @@ async def send_message(msg_data: MessageCreate, user: User = Depends(get_current
         conv_dict = conv.model_dump()
         conv_dict["created_at"] = conv_dict["created_at"].isoformat()
         conv_dict["last_message_at"] = None
-        await db.conversations.insert_one(conv_dict)
-        conv = conv_dict
+        await db.conversations.insert_one(conv_dict.copy())
+        # Use clean dict without _id
+        conv = {k: v for k, v in conv_dict.items() if k != "_id"}
     
     # Create message
     message = Message(
@@ -640,7 +641,7 @@ async def send_message(msg_data: MessageCreate, user: User = Depends(get_current
     msg_dict = message.model_dump()
     msg_dict["created_at"] = msg_dict["created_at"].isoformat()
     
-    await db.messages.insert_one(msg_dict)
+    await db.messages.insert_one(msg_dict.copy())
     
     # Update conversation
     await db.conversations.update_one(
@@ -654,7 +655,8 @@ async def send_message(msg_data: MessageCreate, user: User = Depends(get_current
         }
     )
     
-    return msg_dict
+    # Return clean dict without _id
+    return {k: v for k, v in msg_dict.items() if k != "_id"}
 
 @api_router.get("/messages/conversations")
 async def get_conversations(user: User = Depends(get_current_user)):
