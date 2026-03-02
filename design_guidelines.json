@@ -1,0 +1,167 @@
+{
+  "identity": {
+    "name": "SuperNetworkAI",
+    "tone": "Futuristic, Professional, Immersive, Purpose-Driven",
+    "aesthetic": "Galactic Glassmorphism",
+    "persona": "The Architect of Connections",
+    "keywords": ["Constellation", "Ikigai", "Flow", "Neon", "Deep Space"]
+  },
+  "typography": {
+    "font_family": {
+      "headings": "Outfit, sans-serif",
+      "body": "Manrope, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "weights": {
+      "light": 300,
+      "regular": 400,
+      "medium": 500,
+      "bold": 700,
+      "black": 900
+    },
+    "usage": {
+      "h1": "text-5xl md:text-7xl font-black tracking-tight leading-none bg-clip-text text-transparent bg-gradient-to-r from-white via-white to-white/50",
+      "h2": "text-3xl md:text-5xl font-bold tracking-tight text-white",
+      "h3": "text-2xl md:text-3xl font-semibold text-white/90",
+      "body": "text-base md:text-lg text-slate-300 leading-relaxed",
+      "caption": "text-sm text-slate-400 font-mono tracking-wide uppercase"
+    }
+  },
+  "colors": {
+    "theme": "dark",
+    "palette": {
+      "background": {
+        "default": "hsl(240 10% 3.9%)",
+        "deep": "hsl(240 10% 2%)",
+        "surface": "hsl(240 5% 10%)"
+      },
+      "primary": {
+        "DEFAULT": "hsl(250 100% 70%)",
+        "glow": "0 0 20px hsl(250 100% 70% / 0.5)"
+      },
+      "secondary": {
+        "DEFAULT": "hsl(180 100% 50%)",
+        "glow": "0 0 20px hsl(180 100% 50% / 0.5)"
+      },
+      "accent": {
+        "pink": "hsl(320 100% 60%)",
+        "gold": "hsl(45 100% 50%)",
+        "green": "hsl(150 100% 45%)"
+      },
+      "text": {
+        "primary": "hsl(0 0% 98%)",
+        "secondary": "hsl(240 5% 70%)",
+        "muted": "hsl(240 5% 50%)"
+      },
+      "border": {
+        "subtle": "hsl(240 5% 20%)",
+        "glass": "rgba(255, 255, 255, 0.1)"
+      }
+    },
+    "gradients": {
+      "galaxy": "bg-gradient-to-br from-indigo-900 via-purple-900 to-black",
+      "beam": "bg-gradient-to-r from-transparent via-cyan-500 to-transparent"
+    }
+  },
+  "spacing": {
+    "scale": {
+      "xs": "0.5rem",
+      "sm": "1rem",
+      "md": "2rem",
+      "lg": "4rem",
+      "xl": "8rem",
+      "2xl": "12rem"
+    },
+    "container": "max-w-7xl mx-auto px-6 md:px-12",
+    "section_gap": "gap-12 md:gap-24"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-white text-black hover:bg-white/90 font-bold rounded-full px-8 py-3 transition-all hover:scale-105 hover:shadow-[0_0_20px_rgba(255,255,255,0.3)]",
+      "secondary": "bg-white/5 border border-white/10 text-white hover:bg-white/10 backdrop-blur-md rounded-full px-8 py-3 transition-all",
+      "ghost": "text-slate-300 hover:text-white transition-colors"
+    },
+    "cards": {
+      "glass": "bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl p-8 hover:border-white/20 transition-all shadow-2xl",
+      "holographic": "relative overflow-hidden bg-gradient-to-b from-white/5 to-transparent border border-white/10 rounded-xl p-6"
+    },
+    "inputs": {
+      "default": "bg-black/20 border border-white/10 rounded-lg px-4 py-3 text-white placeholder:text-slate-600 focus:border-primary/50 focus:ring-1 focus:ring-primary/50 transition-all outline-none"
+    }
+  },
+  "layout": {
+    "grid_system": "grid grid-cols-1 md:grid-cols-12 gap-6",
+    "bento_rules": "Use col-span-4 for standard cards, col-span-8 for hero features, col-span-6 for split views. Always maintain 100% width on children.",
+    "alignment": "Left-align text by default. Center only for Hero headlines."
+  },
+  "motion": {
+    "transitions": "transition-all duration-300 ease-out",
+    "micro_interactions": "hover:-translate-y-1 hover:shadow-lg",
+    "entrance": "animate-in fade-in slide-in-from-bottom-4 duration-700",
+    "3d_performance": "Use interaction-triggered animations rather than always-on loops where possible. Limit particle count on mobile."
+  },
+  "three_d_strategy": {
+    "library": "React Three Fiber (@react-three/fiber)",
+    "helpers": "@react-three/drei (Environment, Float, Stars, Sparkles)",
+    "physics": "Not required unless for drag interactions",
+    "scenes": {
+      "hero": {
+        "concept": "Constellation Network",
+        "description": "Interactive particles that connect with lines when hovered. Represents the network.",
+        "tech": "PointsMaterial, BufferGeometry, Raycaster"
+      },
+      "onboarding": {
+        "concept": "Ikigai Crystal",
+        "description": "4-sided crystal or sphere structure where each side represents Love, Good At, Paid For, World Needs. It grows/glows as user fills data.",
+        "tech": "MeshPhysicalMaterial (Glass), PointLight"
+      }
+    }
+  },
+  "assets": {
+    "icons": "Lucide React (default), Phosphor Icons (for specific UI needs)",
+    "images": {
+      "hero_abstract": "https://images.unsplash.com/photo-1675044794023-2c70962f4899?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "constellation_ref": "https://images.unsplash.com/photo-1692211813397-7742d871a925?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "glass_shapes": [
+        "https://images.unsplash.com/photo-1660846125563-a07c7ceee60b?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "https://images.unsplash.com/photo-1771599940657-f9f151abed45?crop=entropy&cs=srgb&fm=jpg&q=85"
+      ],
+      "people": [
+        "https://images.unsplash.com/photo-1647427854253-b92bb40c9330?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "https://images.unsplash.com/photo-1607332646791-929f9ddcf96a?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "https://images.unsplash.com/photo-1616835240434-d91feb116120?crop=entropy&cs=srgb&fm=jpg&q=85"
+      ]
+    }
+  },
+  "instructions_to_main_agent": [
+    "Install 'framer-motion', 'clsx', 'tailwind-merge', 'lucide-react', '@react-three/fiber', '@react-three/drei', 'three' immediately.",
+    "Set up the Tailwind config to use the HSL variables defined in the colors section.",
+    "Create a 'Layout' component that wraps pages with the dark background and a subtle 'Stars' or 'Noise' overlay.",
+    "Implement the 'Ikigai Onboarding' as a multi-step wizard where the 3D element on the right evolves with each step.",
+    "Use 'Sonner' for all notifications.",
+    "For the 'People Search', use a Bento grid layout for results, not a standard list.",
+    "Ensure the 'Leaderboard' uses glassmorphism panels."
+  ],
+  "universal_guidelines": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur)",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯📚🎭🎬🎪🎉🎊🎁🎀🎂🍰🎈🎨🎰💰💵💳🏦💎🪙💸🤑📊📈📉💹🔢🏆🥇 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories (especially sponsor logos) = main agent will use placeholder text which is FORBIDDEN",
+    "Prioritize using pre-existing components from src/components/ui when applicable",
+    "Create new components that match the style and conventions of existing components when needed",
+    "Examine existing components to understand the project's component patterns before creating new ones",
+    "Components MUST use named exports (export const ComponentName = ...)",
+    "Pages MUST use default exports (export default function PageName() {...})",
+    "Use 'sonner' for toasts",
+    "Sonner component are located in /app/src/components/ui/sonner.tsx"
+  ]
+}
