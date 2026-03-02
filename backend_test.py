@@ -113,6 +113,79 @@ class SuperNetworkAITester:
         
         return True
 
+    def test_authenticated_endpoints(self):
+        """Test authenticated endpoints with valid session token"""
+        print("\n=== TESTING AUTHENTICATED ENDPOINTS ===")
+        
+        # Use test session token
+        test_token = "test_session_1772444369754"
+        self.session_token = test_token
+        
+        # Test auth/me with valid token
+        success, user_data = self.run_test("Auth Me (With Token)", "GET", "auth/me", 200)
+        if success:
+            self.test_user_id = user_data.get('user_id')
+            print(f"   Authenticated as: {user_data.get('name')} (ID: {self.test_user_id})")
+        
+        # Test getting ikigai profile
+        self.run_test("Get My Ikigai", "GET", "ikigai", 200)
+        
+        # Test creating/updating ikigai
+        self.run_test("Update Ikigai", "POST", "ikigai", 200, {
+            "what_i_love": ["Building AI products", "Solving problems"],
+            "what_im_good_at": ["Python", "Machine Learning"],
+            "what_i_can_be_paid_for": ["AI Development"],
+            "what_the_world_needs": ["Ethical AI"]
+        })
+        
+        # Test profile update
+        self.run_test("Update Profile", "PUT", "users/profile", 200, {
+            "role_labels": ["AI Engineer", "Testing"]
+        })
+        
+        # Test opportunity creation
+        success, opp_data = self.run_test("Create Opportunity", "POST", "opportunities", 201, {
+            "type": "gig",
+            "title": "Test AI Project",
+            "description": "Need AI developer for testing project",
+            "skills_required": ["Python", "AI"],
+            "compensation_type": "Fixed",
+            "compensation_amount": "$500",
+            "timeline": "1 week"
+        })
+        
+        # Test search people
+        self.run_test("Search People", "POST", "search/people", 200, {
+            "query": "AI engineer with Python skills"
+        })
+        
+        # Test messaging endpoints
+        if self.test_user_id:
+            # Create a message (will create conversation automatically)
+            self.run_test("Send Message", "POST", "messages", 200, {
+                "receiver_id": self.test_user_id,  # Send to self for testing
+                "content": "Test message for system validation"
+            })
+            
+            # Get conversations
+            self.run_test("Get Conversations", "GET", "messages/conversations", 200)
+        
+        # Test rating creation
+        if self.test_user_id:
+            # Try to rate self (should fail)
+            self.run_test("Rate Self (Should Fail)", "POST", "ratings", 400, {
+                "rated_user_id": self.test_user_id,
+                "collaboration": 9,
+                "reliability": 8,
+                "skill_quality": 9,
+                "culture_fit": 8,
+                "professionalism": 9,
+                "would_work_again": True,
+                "comments": "Great developer!"
+            })
+        
+        return True
+
     def test_protected_endpoints_without_auth(self):
         """Test that protected endpoints properly reject unauthenticated requests"""
         print("\n=== TESTING PROTECTED ENDPOINTS (No Auth) ===")
