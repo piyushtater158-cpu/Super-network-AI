@@ -241,6 +241,7 @@ def main():
     tester.test_basic_endpoints()
     tester.test_public_endpoints()
     tester.test_auth_endpoints()
+    tester.test_authenticated_endpoints()
     tester.test_protected_endpoints_without_auth()
     
     # Print final summary
