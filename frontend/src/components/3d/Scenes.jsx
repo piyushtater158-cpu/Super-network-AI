@@ -1,4 +1,4 @@
-import { useRef, useEffect, useState } from "react";
+import { useRef, useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Particle component for constellation effect
@@ -153,133 +153,7 @@ export const ConstellationScene = () => {
   );
 };
 
-// Ikigai Crystal Section
-const IkigaiNode = ({ color, label, active, position, delay }) => (
-  <motion.div
-    className="absolute flex flex-col items-center"
-    style={{
-      left: position.x,
-      top: position.y,
-      transform: "translate(-50%, -50%)",
-    }}
-    initial={{ opacity: 0, scale: 0 }}
-    animate={{
-      opacity: active ? 1 : 0.4,
-      scale: active ? 1 : 0.7,
-    }}
-    transition={{ duration: 0.5, delay }}
-  >
-    <motion.div
-      className="rounded-full"
-      style={{
-        width: active ? 60 : 40,
-        height: active ? 60 : 40,
-        background: `radial-gradient(circle at 30% 30%, ${color}, ${color}88)`,
-        boxShadow: active ? `0 0 30px ${color}, 0 0 60px ${color}44` : `0 0 10px ${color}44`,
-      }}
-      animate={
-        active
-          ? {
-              scale: [1, 1.1, 1],
-              boxShadow: [
-                `0 0 30px ${color}, 0 0 60px ${color}44`,
-                `0 0 40px ${color}, 0 0 80px ${color}66`,
-                `0 0 30px ${color}, 0 0 60px ${color}44`,
-              ],
-            }
-          : {}
-      }
-      transition={{
-        duration: 2,
-        repeat: Infinity,
-        ease: "easeInOut",
-      }}
-    />
-    <span
-      className={`mt-2 text-xs font-medium transition-colors duration-300 ${
-        active ? "text-white" : "text-slate-500"
-      }`}
-    >
-      {label}
-    </span>
-  </motion.div>
-);
-
-// Central Crystal
-const CentralCrystal = ({ progress }) => (
-  <motion.div
-    className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2"
-    initial={{ opacity: 0, scale: 0 }}
-    animate={{ opacity: 1, scale: 0.5 + progress * 0.5 }}
-    transition={{ duration: 0.5 }}
-  >
-    <motion.div
-      className="w-20 h-20 relative"
-      animate={{ rotateY: 360 }}
-      transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-    >
-      {/* Crystal shape using CSS */}
-      <div
-        className="absolute inset-0"
-        style={{
-          background: `linear-gradient(135deg, 
-            hsl(250, 100%, 70%, ${0.3 + progress * 0.4}) 0%, 
-            hsl(180, 100%, 50%, ${0.3 + progress * 0.4}) 50%, 
-            hsl(320, 100%, 60%, ${0.3 + progress * 0.4}) 100%)`,
-          clipPath:
-            "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
-          boxShadow: `0 0 ${20 + progress * 40}px hsl(250, 100%, 70%, 0.5)`,
-        }}
-      />
-      <motion.div
-        className="absolute inset-2"
-        style={{
-          background: `linear-gradient(45deg, 
-            hsl(180, 100%, 50%, ${0.2 + progress * 0.3}) 0%, 
-            hsl(250, 100%, 70%, ${0.2 + progress * 0.3}) 100%)`,
-          clipPath:
-            "polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%)",
-        }}
-        animate={{
-          opacity: [0.5, 1, 0.5],
-        }}
-        transition={{
-          duration: 2,
-          repeat: Infinity,
-          ease: "easeInOut",
-        }}
-      />
-    </motion.div>
-  </motion.div>
-);
-
-// Connection lines
-const ConnectionLine = ({ from, to, active }) => {
-  const angle = Math.atan2(to.y - from.y, to.x - from.x);
-  const length = Math.sqrt(Math.pow(to.x - from.x, 2) + Math.pow(to.y - from.y, 2));
-
-  return (
-    <motion.div
-      className="absolute"
-      style={{
-        left: from.x,
-        top: from.y,
-        width: length,
-        height: 2,
-        transformOrigin: "left center",
-        transform: `rotate(${angle}rad)`,
-        background: active
-          ? "linear-gradient(90deg, hsl(250, 100%, 70%, 0.6), hsl(180, 100%, 50%, 0.6))"
-          : "linear-gradient(90deg, hsl(250, 100%, 70%, 0.2), hsl(180, 100%, 50%, 0.2))",
-      }}
-      initial={{ scaleX: 0 }}
-      animate={{ scaleX: 1, opacity: active ? 1 : 0.3 }}
-      transition={{ duration: 0.5 }}
-    />
-  );
-};
-
-// Ikigai Scene for Onboarding
+// Ikigai Scene for Onboarding - uses CSS animations
 export const IkigaiScene = ({ progress = 0, activeSection = 0 }) => {
   const [mounted, setMounted] = useState(false);
 
@@ -289,14 +163,7 @@ export const IkigaiScene = ({ progress = 0, activeSection = 0 }) => {
 
   if (!mounted) return null;
 
-  const nodes = [
-    { color: "hsl(320, 100%, 60%)", label: "LOVE", position: { x: "50%", y: "15%" } },
-    { color: "hsl(250, 100%, 70%)", label: "GOOD AT", position: { x: "85%", y: "50%" } },
-    { color: "hsl(180, 100%, 50%)", label: "PAID FOR", position: { x: "50%", y: "85%" } },
-    { color: "hsl(150, 100%, 45%)", label: "NEEDED", position: { x: "15%", y: "50%" } },
-  ];
-
-  const center = { x: "50%", y: "50%" };
+  const colors = ["#ec4899", "#8b5cf6", "#06b6d4", "#22c55e"];
 
   return (
     <div className="absolute inset-0 overflow-hidden">
@@ -305,25 +172,29 @@ export const IkigaiScene = ({ progress = 0, activeSection = 0 }) => {
         <Star key={`ikigai-star-${i}`} index={i} />
       ))}
 
-      {/* Central crystal */}
-      <CentralCrystal progress={progress} />
+      {/* Central crystal glow */}
+      <motion.div
+        className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[200px] h-[200px] rounded-full"
+        style={{
+          background: `radial-gradient(circle, ${colors[activeSection]}40 0%, transparent 70%)`,
+        }}
+        animate={{
+          scale: [1, 1.3, 1],
+          opacity: [0.3, 0.7, 0.3],
+        }}
+        transition={{
+          duration: 3,
+          repeat: Infinity,
+          ease: "easeInOut",
+        }}
+      />
 
-      {/* Ikigai nodes */}
-      {nodes.map((node, i) => (
-        <IkigaiNode
-          key={node.label}
-          {...node}
-          active={i === activeSection || i < activeSection}
-          delay={i * 0.1}
-        />
-      ))}
-
-      {/* Ambient glow */}
+      {/* Ambient glow based on active section */}
       <motion.div
         className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[300px] rounded-full"
         style={{
           background: `radial-gradient(circle, 
-            hsl(${250 + activeSection * 30}, 100%, 70%, 0.15) 0%, 
+            ${colors[activeSection]}20 0%, 
             transparent 70%)`,
         }}
         animate={{
@@ -340,7 +211,7 @@ export const IkigaiScene = ({ progress = 0, activeSection = 0 }) => {
   );
 };
 
-// Simple Stars Background
+// Simple Stars Background for layouts
 export const StarsBackground = () => {
   const [mounted, setMounted] = useState(false);
 
