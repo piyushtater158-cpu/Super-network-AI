@@ -10,9 +10,9 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
-import google.generativeai as genai
+import google.genai as genai
+from google.genai import types as genai_types
 from google.oauth2 import service_account as _sa
-from google.auth.transport.requests import Request as _AuthRequest
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
 import json
@@ -26,13 +26,24 @@ cred = credentials.Certificate(str(_cred_path))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# ==================== GEMINI AUTH (service account, no separate API key needed) ====================
-_gemini_creds = _sa.Credentials.from_service_account_file(
-    str(_cred_path),
-    scopes=["https://www.googleapis.com/auth/generative-language"]
-)
-genai.configure(credentials=_gemini_creds)
-GEMINI_ENABLED = True
+# ==================== GEMINI CLIENT (Vertex AI mode — uses service account, no separate API key) ====================
+_FIREBASE_PROJECT_ID = "super-networking-ai"
+try:
+    gemini_client = genai.Client(
+        vertexai=True,
+        project=_FIREBASE_PROJECT_ID,
+        location="us-central1",
+        credentials=_sa.Credentials.from_service_account_file(
+            str(_cred_path),
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+    )
+    GEMINI_ENABLED = True
+    logging.getLogger(__name__).info("Gemini client initialized via Vertex AI (service account)")
+except Exception as _e:
+    gemini_client = None
+    GEMINI_ENABLED = False
+    logging.getLogger(__name__).warning(f"Gemini disabled: {_e}")
 
 # Create the main app
 app = FastAPI()
@@ -852,8 +863,11 @@ What the WORLD NEEDS: {', '.join(ikigai.what_the_world_needs) or 'Not specified'
 
 Generate a 2-3 sentence Ikigai statement that captures the intersection of these elements."""
 
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = await run_sync(model.generate_content, prompt)
+    response = await run_sync(
+        gemini_client.models.generate_content,
+        model="gemini-2.0-flash",
+        contents=prompt
+    )
     return response.text
 
 async def ai_search_people(query: str, intent_filter: Optional[str], availability_filter: Optional[str]) -> List[dict]:
@@ -911,8 +925,11 @@ Rank the top 10 most relevant profiles for this search. Return a JSON array with
 Only return the JSON array, nothing else."""
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = await run_sync(model.generate_content, prompt)
+        response = await run_sync(
+            gemini_client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
         response_text = response.text.strip()
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
@@ -983,8 +1000,11 @@ Rank all candidates by fit. Return JSON array:
 [{{"applicant_id": "...", "match_score": 0.0-1.0, "reasoning_summary": "...", "highlighted_overlap": ["..."]}}]"""
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = await run_sync(model.generate_content, prompt)
+        response = await run_sync(
+            gemini_client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
 
         response_text = response.text.strip()
         if response_text.startswith("```"):
