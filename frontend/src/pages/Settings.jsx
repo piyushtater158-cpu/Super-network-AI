@@ -28,6 +28,9 @@ import {
   Plus,
   X,
   Save,
+  Globe2,
+  Lock,
+  Settings2
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -47,7 +50,19 @@ export default function Settings() {
     availability: user?.availability || "Available now",
     available_from: user?.available_from || "",
     role_labels: user?.role_labels || [],
+    is_public: user?.is_public !== false,
+    matching_preferences: user?.matching_preferences || {
+      skills: [], interests: [], working_style: "Flexible",
+      team_preference: "Flexible", hours_per_week: 40, domains: []
+    },
   });
+
+  const handlePreferenceChange = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      matching_preferences: { ...prev.matching_preferences, [field]: value }
+    }));
+  };
 
   const handleChange = (field, value) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -323,6 +338,79 @@ export default function Settings() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+
+          {/* Visibility Controls */}
+          <div className="glass rounded-2xl p-6">
+            <h3 className="text-lg font-semibold text-white mb-6 flex items-center gap-2">
+              <Globe2 size={18} className="text-[hsl(200_100%_50%)]" />
+              Privacy & Visibility
+            </h3>
+            <div className="flex items-start space-x-3 bg-white/5 p-4 rounded-xl border border-white/10 text-white/90">
+              <Checkbox
+                id="is_public"
+                checked={formData.is_public}
+                onCheckedChange={(c) => handleChange("is_public", c)}
+              />
+              <div>
+                <Label htmlFor="is_public" className="font-medium cursor-pointer">Public Profile</Label>
+                <p className="text-sm text-slate-400 mt-1">
+                  Allow your profile to appear in AI matching results and the leaderboard. Turn this off to stay hidden while searching for opportunities.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Matching Preferences */}
+          <div className="glass rounded-2xl p-6">
+            <h3 className="text-lg font-semibold text-white mb-6 flex items-center gap-2">
+              <Settings2 size={18} className="text-[hsl(45_100%_50%)]" />
+              Matching Preferences
+            </h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-white">Working Style</Label>
+                <Select
+                  value={formData.matching_preferences.working_style}
+                  onValueChange={(val) => handlePreferenceChange("working_style", val)}
+                >
+                  <SelectTrigger className="bg-black/30 border-white/10 text-white"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-white/10">
+                    <SelectItem value="Flexible">Flexible / Hybrid</SelectItem>
+                    <SelectItem value="Remote Only">Remote Only</SelectItem>
+                    <SelectItem value="In Person Only">In Person Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-white">Team Setting</Label>
+                <Select
+                  value={formData.matching_preferences.team_preference}
+                  onValueChange={(val) => handlePreferenceChange("team_preference", val)}
+                >
+                  <SelectTrigger className="bg-black/30 border-white/10 text-white"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-slate-900 border-white/10">
+                    <SelectItem value="Flexible">Open to Any</SelectItem>
+                    <SelectItem value="Solo">Solo Contributor</SelectItem>
+                    <SelectItem value="Small Team">Small Team (2-5)</SelectItem>
+                    <SelectItem value="Large Team">Large Team / Enterprise</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-white">Capacity (Hours/Week)</Label>
+                <Input
+                  type="number"
+                  min="5" max="80"
+                  value={formData.matching_preferences.hours_per_week}
+                  onChange={(e) => handlePreferenceChange("hours_per_week", parseInt(e.target.value) || 40)}
+                  className="bg-black/30 border-white/10 text-white placeholder:text-slate-500"
+                />
+              </div>
             </div>
           </div>
 

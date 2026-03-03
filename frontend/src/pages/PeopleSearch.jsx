@@ -37,6 +37,17 @@ export default function PeopleSearch() {
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
 
+  // V2 Filters
+  const [minScoreFilter, setMinScoreFilter] = useState("0");
+  const [workingStyleFilter, setWorkingStyleFilter] = useState("all");
+
+  const filteredResults = results.filter(p => {
+    const score = parseFloat(minScoreFilter);
+    if (score > 0 && (p.peer_score || 0) < score) return false;
+    if (workingStyleFilter !== "all" && p.matching_preferences?.working_style !== workingStyleFilter) return false;
+    return true;
+  });
+
   const handleSearch = async () => {
     if (!searchQuery.trim()) {
       toast.error("Please enter a search query");
@@ -140,6 +151,26 @@ export default function PeopleSearch() {
                 <SelectItem value="On a gig — limited capacity">Limited Capacity</SelectItem>
               </SelectContent>
             </Select>
+            <Select value={workingStyleFilter} onValueChange={setWorkingStyleFilter}>
+              <SelectTrigger className="w-[180px] bg-white/5 border-white/10 text-white">
+                <SelectValue placeholder="Working Style" />
+              </SelectTrigger>
+              <SelectContent className="bg-[hsl(240_5%_10%)] border-white/10">
+                <SelectItem value="all">Any Style</SelectItem>
+                <SelectItem value="Flexible">Flexible / Hybrid</SelectItem>
+                <SelectItem value="Remote Only">Remote Only</SelectItem>
+                <SelectItem value="In Person Only">In Person Only</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="flex items-center gap-2 bg-white/5 px-4 rounded-md border border-white/10">
+              <span className="text-sm text-slate-400 whitespace-nowrap">Min Score: {minScoreFilter}</span>
+              <input
+                type="range" min="0" max="10" step="0.5"
+                value={minScoreFilter}
+                onChange={(e) => setMinScoreFilter(e.target.value)}
+                className="w-24 accent-[hsl(250_100%_70%)]"
+              />
+            </div>
           </div>
         </div>
 
@@ -168,9 +199,9 @@ export default function PeopleSearch() {
               Try adjusting your search query or filters
             </p>
           </div>
-        ) : results.length > 0 ? (
+        ) : filteredResults.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {results.map((person) => (
+            {filteredResults.map((person) => (
               <Link
                 key={person.user_id}
                 to={`/profile/${person.user_id}`}
@@ -247,11 +278,10 @@ export default function PeopleSearch() {
                   <div className="flex items-center gap-3">
                     <Badge
                       variant="outline"
-                      className={`text-xs ${
-                        person.availability === "Available now"
+                      className={`text-xs ${person.availability === "Available now"
                           ? "border-[hsl(150_100%_45%)]/50 text-[hsl(150_100%_45%)]"
                           : "border-[hsl(45_100%_50%)]/50 text-[hsl(45_100%_50%)]"
-                      }`}
+                        }`}
                     >
                       {person.availability === "Available now" ? "Available" : "Limited"}
                     </Badge>
@@ -269,7 +299,7 @@ export default function PeopleSearch() {
             <Sparkles size={48} className="mx-auto text-[hsl(250_100%_70%)] mb-4" />
             <h3 className="text-lg font-semibold text-white mb-2">AI-Powered Search</h3>
             <p className="text-slate-400 max-w-md mx-auto">
-              Use natural language to find people. Try searching for specific skills, 
+              Use natural language to find people. Try searching for specific skills,
               interests, or collaboration types.
             </p>
           </div>

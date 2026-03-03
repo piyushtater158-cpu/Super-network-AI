@@ -22,6 +22,9 @@ import {
   Users,
   TrendingUp,
   Sparkles,
+  Download,
+  FileText,
+  Settings2,
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -55,8 +58,8 @@ const RatingDimension = ({ label, value, maxValue = 10 }) => (
       <span className="text-slate-400">{label}</span>
       <span className="font-semibold text-white">{value?.toFixed(1) || "—"}</span>
     </div>
-    <Progress 
-      value={(value / maxValue) * 100} 
+    <Progress
+      value={(value / maxValue) * 100}
       className="h-1.5 bg-white/10"
     />
   </div>
@@ -160,7 +163,7 @@ export default function Profile() {
         {/* Header Card */}
         <div className="glass rounded-3xl p-8 mb-6 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-64 h-64 bg-[hsl(250_100%_70%)] opacity-10 blur-[100px]" />
-          
+
           <div className="relative z-10">
             <div className="flex flex-col md:flex-row items-start md:items-center gap-6 mb-8">
               <Avatar className="w-24 h-24 border-4 border-white/20">
@@ -180,7 +183,7 @@ export default function Profile() {
                     </Badge>
                   )}
                 </div>
-                
+
                 {profileUser.role_labels?.length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-3">
                     {profileUser.role_labels.map((role, i) => (
@@ -200,11 +203,10 @@ export default function Profile() {
                   )}
                   <Badge
                     variant="outline"
-                    className={`${
-                      profileUser.availability === "Available now"
+                    className={`${profileUser.availability === "Available now"
                         ? "border-[hsl(150_100%_45%)]/50 text-[hsl(150_100%_45%)]"
                         : "border-[hsl(45_100%_50%)]/50 text-[hsl(45_100%_50%)]"
-                    }`}
+                      }`}
                   >
                     {profileUser.availability}
                   </Badge>
@@ -214,7 +216,7 @@ export default function Profile() {
                 </div>
               </div>
 
-              {!isOwnProfile && (
+              {!isOwnProfile ? (
                 <Button
                   onClick={startConversation}
                   className="bg-white text-black hover:bg-white/90 rounded-full px-6"
@@ -223,6 +225,25 @@ export default function Profile() {
                   <MessageSquare size={16} className="mr-2" />
                   Message
                 </Button>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    onClick={() => window.open(`${API}/users/${userId}/export/pdf`, "_blank")}
+                    variant="outline"
+                    className="border-white/20 text-white hover:bg-white/10 rounded-full"
+                  >
+                    <FileText size={16} className="mr-2" />
+                    PDF
+                  </Button>
+                  <Button
+                    onClick={() => window.open(`${API}/users/${userId}/export/json`, "_blank")}
+                    variant="outline"
+                    className="border-white/20 text-white hover:bg-white/10 rounded-full"
+                  >
+                    <Download size={16} className="mr-2" />
+                    JSON
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -356,6 +377,30 @@ export default function Profile() {
           </div>
         )}
 
+        {/* Matching Preferences */}
+        {profileUser.matching_preferences && (
+          <div className="glass rounded-2xl p-6 mb-6">
+            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
+              <Settings2 size={20} className="text-[hsl(45_100%_50%)]" />
+              Working Preferences
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                <span className="text-sm text-slate-400 block mb-1">Environment</span>
+                <span className="text-white font-medium">{profileUser.matching_preferences.working_style || "Flexible"}</span>
+              </div>
+              <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                <span className="text-sm text-slate-400 block mb-1">Team Style</span>
+                <span className="text-white font-medium">{profileUser.matching_preferences.team_preference || "Flexible"}</span>
+              </div>
+              <div className="bg-white/5 p-4 rounded-xl border border-white/10">
+                <span className="text-sm text-slate-400 block mb-1">Capacity</span>
+                <span className="text-white font-medium">{profileUser.matching_preferences.hours_per_week || 40} hrs/week</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Recent Ratings */}
         {ratings?.length > 0 && (
           <div className="glass rounded-2xl p-6">
@@ -366,11 +411,10 @@ export default function Profile() {
                   <div className="flex items-center justify-between mb-2">
                     <Badge
                       variant="outline"
-                      className={`${
-                        rating.rater_type === "peer"
+                      className={`${rating.rater_type === "peer"
                           ? "border-[hsl(250_100%_70%)]/50 text-[hsl(250_100%_70%)]"
                           : "border-[hsl(180_100%_50%)]/50 text-[hsl(180_100%_50%)]"
-                      }`}
+                        }`}
                     >
                       {rating.rater_type}
                     </Badge>

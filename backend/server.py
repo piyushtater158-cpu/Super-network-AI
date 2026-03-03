@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
@@ -67,6 +67,15 @@ async def run_sync(fn, *args, **kwargs):
 
 # ==================== MODELS ====================
 
+class MatchingPreferences(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    skills: List[str] = []
+    interests: List[str] = []
+    working_style: str = "Flexible"
+    team_preference: str = "Flexible"
+    hours_per_week: int = 40
+    domains: List[str] = []
+
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     user_id: str
@@ -83,6 +92,9 @@ class User(BaseModel):
     availability: str = "Available now"
     available_from: Optional[str] = None
     onboarding_completed: bool = False
+    is_public: bool = True
+    blocked_users: List[str] = []
+    matching_preferences: MatchingPreferences = Field(default_factory=MatchingPreferences)
     peer_score: float = 0.0
     recruiter_score: float = 0.0
     total_gigs: int = 0
@@ -98,6 +110,9 @@ class UserUpdate(BaseModel):
     secondary_intents: Optional[List[str]] = None
     availability: Optional[str] = None
     available_from: Optional[str] = None
+    is_public: Optional[bool] = None
+    blocked_users: Optional[List[str]] = None
+    matching_preferences: Optional[MatchingPreferences] = None
 
 class IkigaiProfile(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -435,6 +450,22 @@ async def update_profile(updates: UserUpdate, user: User = Depends(get_current_u
     user_doc = await run_sync(user_ref.get)
     return _doc_to_dict(user_doc)
 
+@api_router.get("/users/recalibration-prompts")
+async def get_recalibration_prompts(user: User = Depends(get_current_user)):
+    """Get pending recalibration prompts"""
+    def _query():
+        docs = db.collection('users').document(user.user_id).collection('recalibration_prompts').where('status', '==', 'pending').get()
+        return [d.to_dict() for d in docs]
+    return await run_sync(_query)
+
+@api_router.put("/users/recalibration-prompts/{prompt_id}")
+async def update_recalibration_prompt(prompt_id: str, payload: dict, user: User = Depends(get_current_user)):
+    """Accept or dismiss prompt"""
+    status = payload.get("status") # 'accepted' or 'dismissed'
+    ref = db.collection('users').document(user.user_id).collection('recalibration_prompts').document(prompt_id)
+    await run_sync(ref.update, {"status": status})
+    return {"status": status}
+
 @api_router.get("/users/leaderboard")
 async def get_leaderboard(view: str = "peer", limit: int = 20):
     """Get leaderboard by peer or recruiter score"""
@@ -444,6 +475,7 @@ async def get_leaderboard(view: str = "peer", limit: int = 20):
         docs = (
             db.collection('users')
             .where('onboarding_completed', '==', True)
+            .where('is_public', '==', True)
             .order_by(sort_field, direction=firestore.Query.DESCENDING)
             .limit(limit)
             .get()
@@ -457,6 +489,145 @@ async def get_leaderboard(view: str = "peer", limit: int = 20):
         u["rank"] = i + 1
 
     return users
+
+@api_router.post("/users/upload-cv")
+async def upload_cv(file: UploadFile = File(...), user: User = Depends(get_current_user)):
+    """Parse CV/Resume and return pre-filled Ikigai & Skills"""
+    if not GEMINI_ENABLED:
+        raise HTTPException(status_code=500, detail="Gemini AI is disabled")
+    
+    content = await file.read()
+    text = ""
+    # Only try to parse if PDF
+    if file.filename.endswith(".pdf"):
+        import io
+        from pypdf import PdfReader
+        try:
+            reader = PdfReader(io.BytesIO(content))
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Failed to parse PDF: {e}")
+            raise HTTPException(status_code=400, detail="Invalid PDF file")
+    else:
+        text = content.decode("utf-8", errors="ignore")
+        
+    prompt = f"""You are an expert career coach. Analyze the following CV/Resume text and extract:
+1. Skills (list of strings)
+2. Roles / Titles (list of strings)
+3. Suggested Ikigai entries based on this experience:
+   - what_i_love
+   - what_im_good_at
+   - what_i_can_be_paid_for
+   - what_the_world_needs
+
+Return ONLY valid JSON in this exact structure:
+{{
+  "skills": ["...", "..."],
+  "roles": ["...", "..."],
+  "ikigai_suggestions": {{
+      "what_i_love": ["...", "..."],
+      "what_im_good_at": ["...", "..."],
+      "what_i_can_be_paid_for": ["...", "..."],
+      "what_the_world_needs": ["...", "..."]
+  }}
+}}
+
+Resume Text:
+{text}
+"""
+    try:
+        response = await run_sync(
+            gemini_client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        response_text = response.text.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+        parsed = json.loads(response_text)
+        
+        # Save a flag so we know it was CV parsed
+        user_ref = db.collection('users').document(user.user_id)
+        await run_sync(user_ref.update, {"cv_parsed_data": True})
+        
+        return parsed
+    except Exception as e:
+        logging.getLogger(__name__).error(f"CV parsing failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to parse CV with AI")
+
+
+@api_router.get("/users/{user_id}/export/json")
+async def export_profile_json(user_id: str):
+    """Export user data as JSON"""
+    user_ref = db.collection('users').document(user_id)
+    user_doc = await run_sync(user_ref.get)
+    user_data = _doc_to_dict(user_doc)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    ikigai_ref = db.collection('ikigai_profiles').document(user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    ikigai = _doc_to_dict(ikigai_doc)
+    
+    return {"user": user_data, "ikigai": ikigai}
+
+
+@api_router.get("/users/{user_id}/export/pdf")
+async def export_profile_pdf(user_id: str):
+    """Export user data as PDF"""
+    user_ref = db.collection('users').document(user_id)
+    user_doc = await run_sync(user_ref.get)
+    user_data = _doc_to_dict(user_doc)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    ikigai_ref = db.collection('ikigai_profiles').document(user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    ikigai = _doc_to_dict(ikigai_doc) or {}
+    
+    import io
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import letter
+    from fastapi.responses import Response
+    
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, height - 50, f"SuperNetworkAI Profile: {user_data.get('name', 'Unknown')}")
+    
+    c.setFont("Helvetica", 12)
+    y = height - 80
+    c.drawString(50, y, f"Email: {user_data.get('email', '')}")
+    c.drawString(50, y - 20, f"Intent: {user_data.get('primary_intent', '')}")
+    c.drawString(50, y - 40, f"Availability: {user_data.get('availability', '')}")
+    
+    prefs = user_data.get("matching_preferences", {})
+    if prefs:
+        skills = ", ".join(prefs.get("skills", []))
+        c.drawString(50, y - 60, f"Skills: {skills}")
+        
+    statement = ikigai.get("ikigai_statement", "")
+    if statement:
+        c.drawString(50, y - 90, "Ikigai Statement:")
+        # Simple wrapping
+        c.setFont("Helvetica-Oblique", 11)
+        y_stmt = y - 110
+        import textwrap
+        for line in textwrap.wrap(statement, width=80):
+            c.drawString(60, y_stmt, line)
+            y_stmt -= 15
+    
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    
+    return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename=profile_{user_id}.pdf"})
+
 
 # ==================== IKIGAI ENDPOINTS ====================
 
@@ -832,6 +1003,10 @@ async def create_rating(rating_data: RatingCreate, user: User = Depends(get_curr
 
     # Update user scores
     await update_user_scores(rating_data.rated_user_id)
+    
+    # Continuous Re-calibration trigger
+    if GEMINI_ENABLED:
+        asyncio.create_task(trigger_recalibration_prompt(rating_data.rated_user_id))
 
     return rating_dict
 
@@ -873,7 +1048,7 @@ Generate a 2-3 sentence Ikigai statement that captures the intersection of these
 async def ai_search_people(query: str, intent_filter: Optional[str], availability_filter: Optional[str]) -> List[dict]:
     """AI-powered search for people"""
     def _get_users():
-        q = db.collection('users').where('onboarding_completed', '==', True)
+        q = db.collection('users').where('onboarding_completed', '==', True).where('is_public', '==', True)
         if intent_filter:
             q = q.where('primary_intent', '==', intent_filter)
         if availability_filter:
@@ -950,7 +1125,7 @@ Only return the JSON array, nothing else."""
 
         return ranked_users
     except Exception as e:
-        logger.error(f"AI ranking failed: {e}")
+        logging.getLogger(__name__).error(f"AI ranking failed: {e}")
         return user_profiles[:20]
 
 async def rank_candidates_for_opportunity(opp: dict, applications: List[dict]) -> List[dict]:
@@ -1030,8 +1205,61 @@ Rank all candidates by fit. Return JSON array:
 
         return ranked
     except Exception as e:
-        logger.error(f"Candidate ranking failed: {e}")
+        logging.getLogger(__name__).error(f"Candidate ranking failed: {e}")
         return applications
+
+async def trigger_recalibration_prompt(user_id: str):
+    """Trigger AI to evaluate recent ratings and suggest matching_preferences updates"""
+    try:
+        user_ref = db.collection('users').document(user_id)
+        user_doc = await run_sync(user_ref.get)
+        user_data = _doc_to_dict(user_doc)
+        if not user_data:
+            return
+            
+        def _get_recent_ratings():
+            return [d.to_dict() for d in db.collection('ratings').where('rated_user_id', '==', user_id).order_by('created_at', direction=firestore.Query.DESCENDING).limit(3).get()]
+            
+        recent_ratings = await run_sync(_get_recent_ratings)
+        if not recent_ratings:
+            return
+            
+        prompt = f"""You are an expert career coach helping a user improve their networking profile.
+Review this user's 3 most recent gig ratings and their current matching preferences. Wait to suggest exactly one actionable update to their matching preferences.
+
+Current Preferences: {user_data.get('matching_preferences', {})}
+Recent Ratings: {recent_ratings}
+
+Return JSON:
+{{
+  "suggested_update": "Add 'Reliable' to skills",
+  "rationale": "You scored 10/10 on reliability in your last 3 gigs.",
+  "confidence": 0.95
+}}
+"""
+        response = await run_sync(
+            gemini_client.models.generate_content,
+            model="gemini-2.0-flash",
+            contents=prompt
+        )
+        response_text = response.text.strip()
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+        suggestion = json.loads(response_text)
+        
+        prompt_data = {
+            "prompt_id": f"prompt_{uuid.uuid4().hex[:12]}",
+            "suggested_update": suggestion.get("suggested_update", ""),
+            "rationale": suggestion.get("rationale", ""),
+            "status": "pending",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await run_sync(user_ref.collection('recalibration_prompts').document(prompt_data["prompt_id"]).set, prompt_data)
+        
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Recalibration failed: {e}")
 
 async def update_user_scores(user_id: str):
     """Update user's peer and recruiter scores based on ratings"""

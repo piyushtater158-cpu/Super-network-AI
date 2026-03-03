@@ -22,6 +22,8 @@ import {
   Zap,
   ArrowUpRight,
   Crown,
+  CheckCircle2,
+  XCircle
 } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -29,7 +31,7 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 // Animated opportunity card
 const OpportunityCard = ({ opp, index }) => {
   const navigate = useNavigate();
-  
+
   const getTimeAgo = (dateStr) => {
     const date = new Date(dateStr);
     const now = new Date();
@@ -49,14 +51,14 @@ const OpportunityCard = ({ opp, index }) => {
       onClick={() => navigate(`/opportunity/${opp.opportunity_id}`)}
       className="cursor-pointer"
     >
-      <div 
+      <div
         className="relative p-6 rounded-2xl border border-white/[0.08] bg-white/[0.02] backdrop-blur-sm hover:bg-white/[0.05] hover:border-white/[0.15] transition-all duration-300 group"
         data-testid={`opportunity-card-${opp.opportunity_id}`}
       >
         {/* Glow effect on hover */}
         <div className="absolute inset-0 rounded-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"
           style={{
-            background: opp.type === "gig" 
+            background: opp.type === "gig"
               ? "radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.1), transparent 70%)"
               : "radial-gradient(circle at 50% 50%, rgba(6, 182, 212, 0.1), transparent 70%)"
           }}
@@ -65,11 +67,10 @@ const OpportunityCard = ({ opp, index }) => {
         <div className="relative z-10">
           <div className="flex items-start justify-between mb-4">
             <Badge
-              className={`${
-                opp.type === "gig"
+              className={`${opp.type === "gig"
                   ? "bg-violet-500/20 text-violet-400 border-violet-500/30"
                   : "bg-cyan-500/20 text-cyan-400 border-cyan-500/30"
-              } border`}
+                } border`}
             >
               {opp.type === "gig" ? "Gig" : "Job"}
             </Badge>
@@ -81,7 +82,7 @@ const OpportunityCard = ({ opp, index }) => {
           <h3 className="text-lg font-bold text-white mb-2 group-hover:text-violet-300 transition-colors line-clamp-1">
             {opp.title}
           </h3>
-          
+
           <p className="text-sm text-slate-400 mb-4 line-clamp-2">
             {opp.description}
           </p>
@@ -96,7 +97,7 @@ const OpportunityCard = ({ opp, index }) => {
               </Avatar>
               <span className="text-sm text-slate-400">{opp.creator_name}</span>
             </div>
-            
+
             <div className="flex items-center gap-1 text-xs text-slate-500">
               <Users size={12} />
               {opp.applications_count} applied
@@ -146,13 +147,12 @@ const LeaderboardRow = ({ user, rank }) => (
       </Avatar>
       {rank <= 3 && (
         <div
-          className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${
-            rank === 1
+          className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${rank === 1
               ? "bg-yellow-500 text-black"
               : rank === 2
-              ? "bg-slate-400 text-black"
-              : "bg-amber-700 text-white"
-          }`}
+                ? "bg-slate-400 text-black"
+                : "bg-amber-700 text-white"
+            }`}
         >
           {rank}
         </div>
@@ -180,17 +180,20 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [opportunities, setOpportunities] = useState([]);
   const [topUsers, setTopUsers] = useState([]);
+  const [prompts, setPrompts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [oppsRes, leaderboardRes] = await Promise.all([
+        const [oppsRes, leaderboardRes, promptsRes] = await Promise.all([
           axios.get(`${API}/opportunities?limit=6`, { withCredentials: true }),
           axios.get(`${API}/users/leaderboard?limit=5`, { withCredentials: true }),
+          axios.get(`${API}/users/recalibration-prompts`, { withCredentials: true })
         ]);
         setOpportunities(oppsRes.data);
         setTopUsers(leaderboardRes.data);
+        setPrompts(promptsRes.data);
       } catch (error) {
         console.error("Error fetching dashboard data:", error);
       } finally {
@@ -201,11 +204,25 @@ export default function Dashboard() {
     fetchData();
   }, []);
 
+  const handlePromptAction = async (promptId, status) => {
+    try {
+      await axios.put(`${API}/users/recalibration-prompts/${promptId}`, { status }, { withCredentials: true });
+      setPrompts((prev) => prev.filter((p) => p.prompt_id !== promptId));
+      if (status === 'accepted') {
+        toast.success("Preferences updated based on AI suggestion!");
+        // We typically would re-fetch user profile here to update AuthContext but skipping for brevity
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to update prompt status");
+    }
+  };
+
   return (
     <Layout>
       <div className="max-w-7xl mx-auto px-4 md:px-6" data-testid="dashboard">
         {/* Welcome Section */}
-        <motion.section 
+        <motion.section
           className="mb-10"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -219,7 +236,7 @@ export default function Dashboard() {
             {/* Background effects */}
             <div className="absolute top-0 right-0 w-96 h-96 bg-violet-500/20 rounded-full blur-[100px] pointer-events-none" />
             <div className="absolute bottom-0 left-0 w-64 h-64 bg-cyan-500/10 rounded-full blur-[80px] pointer-events-none" />
-            
+
             <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
               <div>
                 <motion.div
@@ -228,7 +245,7 @@ export default function Dashboard() {
                   transition={{ delay: 0.2 }}
                 >
                   <h1 className="text-3xl md:text-4xl font-black text-white mb-2">
-                    Welcome back, {user?.name?.split(" ")[0]}! 
+                    Welcome back, {user?.name?.split(" ")[0]}!
                     <motion.span
                       className="inline-block ml-2"
                       animate={{ rotate: [0, 14, -8, 14, 0] }}
@@ -242,8 +259,8 @@ export default function Dashboard() {
                   </p>
                 </motion.div>
               </div>
-              
-              <motion.div 
+
+              <motion.div
                 className="flex items-center gap-4"
                 initial={{ opacity: 0, scale: 0.9 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -268,9 +285,37 @@ export default function Dashboard() {
 
         {/* Main Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Opportunities Column */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Section Header */}
+          {/* Main Column */}
+          <div className="lg:col-span-2 space-y-8">
+            {/* AI Prompts */}
+            {prompts.length > 0 && (
+              <div className="space-y-4">
+                {prompts.map((prompt) => (
+                  <motion.div key={prompt.prompt_id}
+                    initial={{ opacity: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="p-4 rounded-xl border border-violet-500/50 bg-violet-500/10 flex flex-col sm:flex-row gap-4 justify-between items-center"
+                  >
+                    <div>
+                      <h4 className="flex items-center gap-2 text-violet-300 font-bold mb-1">
+                        <Sparkles size={16} /> Optional AI Suggestion
+                      </h4>
+                      <p className="text-sm text-slate-300">{prompt.suggestion_text}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button onClick={() => handlePromptAction(prompt.prompt_id, 'dismissed')} variant="ghost" className="text-slate-400 hover:text-white">
+                        Dismiss
+                      </Button>
+                      <Button onClick={() => handlePromptAction(prompt.prompt_id, 'accepted')} className="bg-violet-600 hover:bg-violet-500 text-white">
+                        Accept Change
+                      </Button>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            )}
+
+            {/* Opportunities Header */}
             <div className="flex items-center justify-between">
               <h2 className="text-xl font-bold text-white flex items-center gap-2">
                 <Briefcase size={20} className="text-violet-400" />
@@ -299,7 +344,7 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : opportunities.length === 0 ? (
-              <motion.div 
+              <motion.div
                 className="rounded-2xl p-12 text-center bg-white/[0.02] border border-white/[0.08]"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -343,7 +388,7 @@ export default function Dashboard() {
           {/* Sidebar */}
           <div className="space-y-6">
             {/* Quick Actions */}
-            <motion.div 
+            <motion.div
               className="rounded-2xl p-6 bg-white/[0.02] border border-white/[0.08]"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -378,7 +423,7 @@ export default function Dashboard() {
             </motion.div>
 
             {/* Leaderboard Preview */}
-            <motion.div 
+            <motion.div
               className="rounded-2xl p-6 bg-white/[0.02] border border-white/[0.08]"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -423,7 +468,7 @@ export default function Dashboard() {
             </motion.div>
 
             {/* Your Status */}
-            <motion.div 
+            <motion.div
               className="rounded-2xl p-6 bg-white/[0.02] border border-white/[0.08]"
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -441,11 +486,10 @@ export default function Dashboard() {
                   <span className="text-sm text-slate-400">Availability</span>
                   <Badge
                     variant="outline"
-                    className={`${
-                      user?.availability === "Available now"
+                    className={`${user?.availability === "Available now"
                         ? "border-green-500/50 text-green-400"
                         : "border-yellow-500/50 text-yellow-400"
-                    }`}
+                      }`}
                   >
                     {user?.availability || "Not set"}
                   </Badge>

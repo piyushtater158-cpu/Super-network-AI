@@ -13,12 +13,13 @@ import {
   GradientOrbs,
   ConstellationLines,
 } from "../components/3d/CrystalComponents";
-import { 
-  Heart, 
-  Star, 
-  DollarSign, 
-  Globe, 
-  ArrowRight, 
+import CVUploader from "../components/CVUploader";
+import {
+  Heart,
+  Star,
+  DollarSign,
+  Globe,
+  ArrowRight,
   ArrowLeft,
   Sparkles,
   Plus,
@@ -139,6 +140,26 @@ export default function IkigaiOnboarding() {
     }));
   };
 
+  const handleCVParsed = async (data) => {
+    setFormData(prev => ({
+      what_i_love: [...new Set([...prev.what_i_love, ...(data.ikigai_suggestions?.what_i_love || [])])],
+      what_im_good_at: [...new Set([...prev.what_im_good_at, ...(data.ikigai_suggestions?.what_im_good_at || []), ...(data.skills || [])])],
+      what_i_can_be_paid_for: [...new Set([...prev.what_i_can_be_paid_for, ...(data.ikigai_suggestions?.what_i_can_be_paid_for || []), ...(data.roles || [])])],
+      what_the_world_needs: [...new Set([...prev.what_the_world_needs, ...(data.ikigai_suggestions?.what_the_world_needs || [])])]
+    }));
+
+    try {
+      if ((data.roles && data.roles.length) || (data.skills && data.skills.length)) {
+        await axios.put(`${API}/users/profile`, {
+          role_labels: data.roles || [],
+          matching_preferences: { skills: data.skills || [], interests: [], working_style: "Flexible", team_preference: "Flexible", hours_per_week: 40, domains: [] }
+        }, { withCredentials: true });
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const addExample = (example) => {
     if (currentItems.includes(example)) return;
     setFormData(prev => ({
@@ -181,9 +202,9 @@ export default function IkigaiOnboarding() {
       const response = await axios.post(`${API}/ikigai`, formData, {
         withCredentials: true
       });
-      
+
       updateUser({ ...user, onboarding_completed: true, ikigai: response.data });
-      
+
       toast.success("Your Ikigai profile is ready! Welcome to SuperNetworkAI!");
       navigate("/dashboard", { replace: true });
     } catch (error) {
@@ -204,7 +225,7 @@ export default function IkigaiOnboarding() {
       <GradientOrbs />
 
       {/* Grid lines */}
-      <div 
+      <div
         className="absolute inset-0 opacity-20"
         style={{
           backgroundImage: `
@@ -219,7 +240,7 @@ export default function IkigaiOnboarding() {
       <header className="relative z-20 px-6 py-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <motion.div 
+            <motion.div
               className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-cyan-500 flex items-center justify-center"
               animate={{ rotate: [0, 5, -5, 0] }}
               transition={{ duration: 4, repeat: Infinity }}
@@ -230,7 +251,7 @@ export default function IkigaiOnboarding() {
               SuperNetwork<span className="text-violet-400">AI</span>
             </span>
           </div>
-          
+
           {/* Progress indicator */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-slate-400">Step {currentStep + 1} of {STEPS.length}</span>
@@ -260,7 +281,7 @@ export default function IkigaiOnboarding() {
             {STEPS.map((s, i) => {
               const isActive = i === currentStep;
               const isComplete = formData[s.key].length > 0;
-              
+
               return (
                 <IkigaiNode3D
                   key={s.key}
@@ -316,7 +337,7 @@ export default function IkigaiOnboarding() {
             <div className="mb-8">
               <motion.div
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-4"
-                style={{ 
+                style={{
                   background: `${step.color}20`,
                   border: `1px solid ${step.color}40`,
                 }}
@@ -328,7 +349,7 @@ export default function IkigaiOnboarding() {
                   {step.title}
                 </span>
               </motion.div>
-              
+
               <h2 className="text-4xl font-black text-white mb-3">
                 {step.title}
               </h2>
@@ -354,6 +375,11 @@ export default function IkigaiOnboarding() {
                 ))}
               </div>
             </div>
+
+            {/* CV Uploader (Step 1 only) */}
+            {currentStep === 0 && (
+              <CVUploader onParsedData={handleCVParsed} />
+            )}
 
             {/* Input */}
             <div className="flex gap-3 mb-4">
