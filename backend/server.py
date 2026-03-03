@@ -11,6 +11,8 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import google.generativeai as genai
+from google.oauth2 import service_account as _sa
+from google.auth.transport.requests import Request as _AuthRequest
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
 import json
@@ -24,10 +26,13 @@ cred = credentials.Certificate(str(_cred_path))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Gemini API Key
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+# ==================== GEMINI AUTH (service account, no separate API key needed) ====================
+_gemini_creds = _sa.Credentials.from_service_account_file(
+    str(_cred_path),
+    scopes=["https://www.googleapis.com/auth/generative-language"]
+)
+genai.configure(credentials=_gemini_creds)
+GEMINI_ENABLED = True
 
 # Create the main app
 app = FastAPI()
@@ -833,7 +838,7 @@ async def get_user_ratings(user_id: str):
 
 async def generate_ikigai_statement(ikigai: IkigaiCreate, user_name: str) -> str:
     """Generate an Ikigai statement using Gemini"""
-    if not GEMINI_API_KEY:
+    if not GEMINI_ENABLED:
         return None
 
     prompt = f"""You are an expert in Ikigai philosophy. Generate a concise, inspiring Ikigai statement (2-3 sentences) based on the user's responses. Be specific and personal.
@@ -875,7 +880,7 @@ async def ai_search_people(query: str, intent_filter: Optional[str], availabilit
         u["ikigai"] = _doc_to_dict(ikigai_doc)
         user_profiles.append(u)
 
-    if not GEMINI_API_KEY or not user_profiles:
+    if not GEMINI_ENABLED or not user_profiles:
         return user_profiles[:20]
 
     # Create profiles summary
@@ -936,7 +941,7 @@ async def rank_candidates_for_opportunity(opp: dict, applications: List[dict]) -
     if not applications:
         return []
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_ENABLED:
         return applications
 
     # Get full profiles for applicants
