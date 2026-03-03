@@ -16,6 +16,7 @@ from google.oauth2 import service_account as _sa
 import firebase_admin
 from firebase_admin import credentials, firestore, auth as firebase_auth
 import json
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -26,20 +27,14 @@ cred = credentials.Certificate(str(_cred_path))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# ==================== GEMINI CLIENT (Vertex AI mode — uses service account, no separate API key) ====================
-_FIREBASE_PROJECT_ID = "super-networking-ai"
+# ==================== GEMINI CLIENT ====================
+_GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 try:
-    gemini_client = genai.Client(
-        vertexai=True,
-        project=_FIREBASE_PROJECT_ID,
-        location="us-central1",
-        credentials=_sa.Credentials.from_service_account_file(
-            str(_cred_path),
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-    )
+    if not _GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY not set in .env")
+    gemini_client = genai.Client(api_key=_GEMINI_API_KEY)
     GEMINI_ENABLED = True
-    logging.getLogger(__name__).info("Gemini client initialized via Vertex AI (service account)")
+    logging.getLogger(__name__).info("Gemini client initialized via API key")
 except Exception as _e:
     gemini_client = None
     GEMINI_ENABLED = False
@@ -94,6 +89,10 @@ class User(BaseModel):
     onboarding_completed: bool = False
     is_public: bool = True
     blocked_users: List[str] = []
+    professional_type: Optional[str] = None
+    certifications: List[str] = []
+    achievements: List[str] = []
+    qualifications: List[str] = []
     matching_preferences: MatchingPreferences = Field(default_factory=MatchingPreferences)
     peer_score: float = 0.0
     recruiter_score: float = 0.0
@@ -112,6 +111,10 @@ class UserUpdate(BaseModel):
     available_from: Optional[str] = None
     is_public: Optional[bool] = None
     blocked_users: Optional[List[str]] = None
+    professional_type: Optional[str] = None
+    certifications: Optional[List[str]] = None
+    achievements: Optional[List[str]] = None
+    qualifications: Optional[List[str]] = None
     matching_preferences: Optional[MatchingPreferences] = None
 
 class IkigaiProfile(BaseModel):
@@ -289,6 +292,80 @@ async def get_current_user(request: Request) -> User:
 
 # ==================== AUTH ENDPOINTS ====================
 
+@api_router.post("/auth/linkedin")
+async def linkedin_auth(request: Request, response: Response):
+    """Exchange LinkedIn auth code for a Firebase custom token"""
+    body = await request.json()
+    code = body.get("code")
+    redirect_uri = body.get("redirect_uri")
+    
+    if not code or not redirect_uri:
+        raise HTTPException(status_code=400, detail="code and redirect_uri required")
+        
+    # 1. Exchange code for LinkedIn Access Token
+    async with httpx.AsyncClient() as client:
+        token_res = await client.post(
+            "https://www.linkedin.com/oauth/v2/accessToken",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": os.getenv("LINKEDIN_CLIENT_ID"),
+                "client_secret": os.getenv("LINKEDIN_CLIENT_SECRET"),
+                "redirect_uri": redirect_uri
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"}
+        )
+        if token_res.status_code != 200:
+            logger.error(f"LinkedIn token error: {token_res.text}")
+            raise HTTPException(status_code=401, detail="Invalid LinkedIn authorization code")
+            
+        access_token = token_res.json().get("access_token")
+        
+        # 2. Get User Profile from LinkedIn
+        profile_res = await client.get(
+            "https://api.linkedin.com/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+        
+        if profile_res.status_code != 200:
+            logger.error(f"LinkedIn profile error: {profile_res.text}")
+            raise HTTPException(status_code=401, detail="Failed to fetch LinkedIn profile")
+            
+        profile_data = profile_res.json()
+        
+    email = profile_data.get("email")
+    name = profile_data.get("name")
+    
+    # In OIDC, LinkedIn natively supplies the image in 'picture'
+    picture = profile_data.get("picture")
+    
+    if not email:
+        raise HTTPException(status_code=400, detail="LinkedIn profile missing email")
+        
+    # 3. Check if user exists in Firebase Auth to get UID, or create one
+    try:
+        def _get_user():
+            return firebase_auth.get_user_by_email(email)
+        fb_user = await run_sync(_get_user)
+        uid = fb_user.uid
+        # Update user profile in Firebase Auth so the custom token login reflects the latest LinkedIn data
+        def _update_user():
+            return firebase_auth.update_user(uid, display_name=name, photo_url=picture)
+        await run_sync(_update_user)
+    except firebase_admin.auth.UserNotFoundError:
+        def _create_user():
+            return firebase_auth.create_user(email=email, display_name=name, photo_url=picture)
+        fb_user = await run_sync(_create_user)
+        uid = fb_user.uid
+
+    # 4. Generate Custom Token
+    def _create_custom_token():
+        return firebase_auth.create_custom_token(uid)
+    custom_token_bytes = await run_sync(_create_custom_token)
+    custom_token = custom_token_bytes.decode('utf-8')
+    
+    return {"custom_token": custom_token}
+
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
     """Exchange Firebase ID token for a session token"""
@@ -308,10 +385,26 @@ async def create_session(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="Invalid or expired ID token")
 
     email = decoded_token.get("email")
-    name = decoded_token.get("name", email)
+    name = decoded_token.get("name")
     picture = decoded_token.get("picture")
     # Use the Firebase UID as the session token (stable, unique per user)
     session_token = decoded_token.get("uid")
+
+    # Custom tokens (like our LinkedIn flow) do not embed email/name/picture by default.
+    # Therefore, we fetch the complete user record from Firebase Auth if those claims are missing.
+    if not email or not name or not picture:
+        try:
+            def _get_fb_user():
+                return firebase_auth.get_user(session_token)
+            fb_user = await run_sync(_get_fb_user)
+            email = email or fb_user.email
+            name = name or (fb_user.display_name or email)
+            picture = picture or fb_user.photo_url
+        except Exception as e:
+            logger.error(f"Failed to retrieve Firebase user for session info: {e}")
+
+    # Fallback if name is still empty
+    name = name or email
 
     # Check if user exists (query by email)
     def _find_user_by_email():
@@ -476,13 +569,15 @@ async def get_leaderboard(view: str = "peer", limit: int = 20):
             db.collection('users')
             .where('onboarding_completed', '==', True)
             .where('is_public', '==', True)
-            .order_by(sort_field, direction=firestore.Query.DESCENDING)
-            .limit(limit)
             .get()
         )
         return [d.to_dict() for d in docs]
 
     users = await run_sync(_query)
+    
+    # Sort in memory to avoid Firebase Composite Index requirements during rapid development
+    users.sort(key=lambda x: x.get(sort_field, 0), reverse=True)
+    users = users[:limit]
 
     # Add rank
     for i, u in enumerate(users):
@@ -537,12 +632,13 @@ Resume Text:
 {text}
 """
     try:
-        response = await run_sync(
-            gemini_client.models.generate_content,
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        response_text = response.text.strip()
+        def _call_gemini_cv():
+            resp = gemini_client.models.generate_content(
+                model="models/gemini-2.5-flash",
+                contents=prompt
+            )
+            return resp.text.strip()
+        response_text = await run_sync(_call_gemini_cv)
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
             if response_text.startswith("json"):
@@ -557,6 +653,94 @@ Resume Text:
     except Exception as e:
         logging.getLogger(__name__).error(f"CV parsing failed: {e}")
         raise HTTPException(status_code=500, detail="Failed to parse CV with AI")
+
+
+class ScanLinkedInRequest(BaseModel):
+    linkedin_url: str
+    profile_text: Optional[str] = None  # User pastes their own LinkedIn About/Experience text
+
+@api_router.post("/users/scan-linkedin")
+async def scan_linkedin(payload: ScanLinkedInRequest, user: User = Depends(get_current_user)):
+    """Save LinkedIn URL and optionally extract Showcase data from user-pasted profile text.
+    The AI only reads facts the user explicitly provides — it never guesses or fabricates."""
+    url_str = payload.linkedin_url.strip()
+    if not url_str:
+        raise HTTPException(status_code=400, detail="LinkedIn URL is required")
+
+    if "linkedin.com" not in url_str.lower():
+        raise HTTPException(status_code=400, detail="Please provide a valid LinkedIn profile URL")
+
+    # Always save the URL
+    def _update_linkedin():
+        db.collection('users').document(user.user_id).set({"linkedin_url": url_str}, merge=True)
+    await run_sync(_update_linkedin)
+
+    profile_text = (payload.profile_text or "").strip()
+
+    if not GEMINI_ENABLED:
+        raise HTTPException(status_code=500, detail="AI extraction is disabled")
+
+    # If the user didn't paste text, just save the URL and return empty data
+    if not profile_text:
+        return {
+            "linkedin_url": url_str,
+            "professional_type": "", "skills": [], "roles": [],
+            "certifications": [], "achievements": [],
+            "ikigai_suggestions": {
+                "what_i_love": [], "what_im_good_at": [],
+                "what_i_can_be_paid_for": [], "what_the_world_needs": []
+            }
+        }
+
+    # Step: Strict JSON Extraction (only if text was provided)
+    extract_prompt = f"""You are a professional profile data extractor. Your job is STRICTLY to extract 
+factual information from the professional summary/text provided.
+
+RULES:
+- Extract ONLY information that is explicitly stated in the text.
+- Do NOT guess, infer, or fabricate anything not directly written.
+- If a field has no matching data in the text, return an empty list [] for that field.
+
+Profile Text:
+---
+{profile_text}
+---
+
+Return ONLY valid JSON in this exact structure with no extra text:
+{{
+  "professional_type": "their job title or role, or empty string if not found",
+  "skills": ["only skills explicitly listed"],
+  "roles": ["only job titles/roles explicitly listed"],
+  "certifications": ["only certifications or courses explicitly listed"],
+  "achievements": ["only achievements, awards, or honors explicitly mentioned"],
+  "ikigai_suggestions": {{
+      "what_i_love": ["only passions explicitly stated"],
+      "what_im_good_at": ["only competencies explicitly stated"],
+      "what_i_can_be_paid_for": ["only services/expertise explicitly offered"],
+      "what_the_world_needs": ["only causes or problems they explicitly mention working on"]
+  }}
+}}"""
+
+    try:
+        resp = await gemini_client.aio.models.generate_content(
+            model='models/gemini-2.5-flash',
+            contents=extract_prompt
+        )
+        
+        # safely extract text, guarding against None or custom wrapper objects
+        raw_text = getattr(resp, "text", "") or ""
+        response_text = str(raw_text).strip()
+
+        if response_text.startswith("```"):
+            response_text = response_text.split("```")[1]
+            if response_text.startswith("json"):
+                response_text = response_text[4:]
+
+        return json.loads(response_text)
+    except Exception as e:
+        logger.error(f"Failed to extract LinkedIn profile facts: {e}")
+        raise HTTPException(status_code=500, detail=f"Profile extraction failed: {str(e)}")
+
 
 
 @api_router.get("/users/{user_id}/export/json")
@@ -1040,7 +1224,7 @@ Generate a 2-3 sentence Ikigai statement that captures the intersection of these
 
     response = await run_sync(
         gemini_client.models.generate_content,
-        model="gemini-2.0-flash",
+        model="models/gemini-2.5-flash",
         contents=prompt
     )
     return response.text
@@ -1102,7 +1286,7 @@ Only return the JSON array, nothing else."""
     try:
         response = await run_sync(
             gemini_client.models.generate_content,
-            model="gemini-2.0-flash",
+            model="models/gemini-2.5-flash",
             contents=prompt
         )
         response_text = response.text.strip()
@@ -1177,7 +1361,7 @@ Rank all candidates by fit. Return JSON array:
     try:
         response = await run_sync(
             gemini_client.models.generate_content,
-            model="gemini-2.0-flash",
+            model="models/gemini-2.5-flash",
             contents=prompt
         )
 
@@ -1239,7 +1423,7 @@ Return JSON:
 """
         response = await run_sync(
             gemini_client.models.generate_content,
-            model="gemini-2.0-flash",
+            model="models/gemini-2.5-flash",
             contents=prompt
         )
         response_text = response.text.strip()
