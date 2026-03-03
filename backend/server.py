@@ -1,9 +1,10 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import asyncio
+from functools import partial
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -11,14 +12,17 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# ==================== FIREBASE INIT ====================
+_cred_path = ROOT_DIR / 'firebase_credentials.json'
+cred = credentials.Certificate(str(_cred_path))
+firebase_admin.initialize_app(cred)
+db = firestore.client()
 
 # Emergent LLM Key for Gemini
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
@@ -35,6 +39,13 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ==================== ASYNC FIRESTORE HELPER ====================
+
+async def run_sync(fn, *args, **kwargs):
+    """Run a synchronous Firestore call in a thread pool executor."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
 
 # ==================== MODELS ====================
 
@@ -189,48 +200,59 @@ class SearchQuery(BaseModel):
     intent_filter: Optional[str] = None
     availability_filter: Optional[str] = None
 
+# ==================== FIRESTORE UTILITY FUNCTIONS ====================
+
+def _doc_to_dict(doc_snapshot) -> Optional[dict]:
+    """Convert a Firestore DocumentSnapshot to a plain dict, or None if not found."""
+    if not doc_snapshot.exists:
+        return None
+    return doc_snapshot.to_dict()
+
+def _docs_to_list(query_snapshot) -> List[dict]:
+    """Convert a Firestore query result to a list of plain dicts."""
+    return [doc.to_dict() for doc in query_snapshot]
+
 # ==================== AUTH HELPERS ====================
 
 async def get_current_user(request: Request) -> User:
     """Get current user from session token in cookies or Authorization header"""
     session_token = request.cookies.get("session_token")
-    
+
     if not session_token:
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             session_token = auth_header[7:]
-    
+
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    # Find session
-    session_doc = await db.user_sessions.find_one(
-        {"session_token": session_token},
-        {"_id": 0}
-    )
-    
-    if not session_doc:
+
+    # Find session in Firestore
+    session_ref = db.collection('user_sessions').document(session_token)
+    session_doc = await run_sync(session_ref.get)
+    session_data = _doc_to_dict(session_doc)
+
+    if not session_data:
         raise HTTPException(status_code=401, detail="Invalid session")
-    
+
     # Check expiry
-    expires_at = session_doc.get("expires_at")
+    expires_at = session_data.get("expires_at")
     if isinstance(expires_at, str):
         expires_at = datetime.fromisoformat(expires_at)
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session expired")
-    
+
     # Get user
-    user_doc = await db.users.find_one(
-        {"user_id": session_doc["user_id"]},
-        {"_id": 0}
-    )
-    
-    if not user_doc:
+    user_id = session_data.get("user_id")
+    user_ref = db.collection('users').document(user_id)
+    user_doc = await run_sync(user_ref.get)
+    user_data = _doc_to_dict(user_doc)
+
+    if not user_data:
         raise HTTPException(status_code=401, detail="User not found")
-    
-    return User(**user_doc)
+
+    return User(**user_data)
 
 # ==================== AUTH ENDPOINTS ====================
 
@@ -239,37 +261,40 @@ async def create_session(request: Request, response: Response):
     """Exchange session_id for session_token"""
     body = await request.json()
     session_id = body.get("session_id")
-    
+
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
-    
+
     # Call Emergent Auth to get user data
     async with httpx.AsyncClient() as client_http:
         auth_response = await client_http.get(
             "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
             headers={"X-Session-ID": session_id}
         )
-        
+
         if auth_response.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid session_id")
-        
+
         auth_data = auth_response.json()
-    
+
     email = auth_data.get("email")
     name = auth_data.get("name")
     picture = auth_data.get("picture")
     session_token = auth_data.get("session_token")
-    
-    # Check if user exists
-    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
-    
+
+    # Check if user exists (query by email)
+    def _find_user_by_email():
+        docs = db.collection('users').where('email', '==', email).limit(1).get()
+        results = list(docs)
+        return results[0].to_dict() if results else None
+
+    existing_user = await run_sync(_find_user_by_email)
+
     if existing_user:
         user_id = existing_user["user_id"]
-        # Update user info if needed
-        await db.users.update_one(
-            {"user_id": user_id},
-            {"$set": {"name": name, "picture": picture}}
-        )
+        # Update user info
+        user_ref = db.collection('users').document(user_id)
+        await run_sync(user_ref.update, {"name": name, "picture": picture})
     else:
         # Create new user
         user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -293,9 +318,10 @@ async def create_session(request: Request, response: Response):
             "total_gigs": 0,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.users.insert_one(new_user)
-    
-    # Store session
+        user_ref = db.collection('users').document(user_id)
+        await run_sync(user_ref.set, new_user)
+
+    # Store session in Firestore (document ID = session_token for O(1) lookup)
     expires_at = datetime.now(timezone.utc) + timedelta(days=7)
     session_doc = {
         "user_id": user_id,
@@ -303,8 +329,9 @@ async def create_session(request: Request, response: Response):
         "expires_at": expires_at.isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat()
     }
-    await db.user_sessions.insert_one(session_doc)
-    
+    session_ref = db.collection('user_sessions').document(session_token)
+    await run_sync(session_ref.set, session_doc)
+
     # Set cookie
     response.set_cookie(
         key="session_token",
@@ -315,33 +342,38 @@ async def create_session(request: Request, response: Response):
         path="/",
         max_age=7 * 24 * 60 * 60
     )
-    
-    # Get full user data
-    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    
-    return {"user": user_doc}
+
+    # Return full user data
+    user_ref = db.collection('users').document(user_id)
+    user_doc = await run_sync(user_ref.get)
+    user_data = _doc_to_dict(user_doc)
+
+    return {"user": user_data}
 
 @api_router.get("/auth/me")
 async def get_me(user: User = Depends(get_current_user)):
     """Get current user data"""
     # Also get ikigai profile
-    ikigai = await db.ikigai_profiles.find_one({"user_id": user.user_id}, {"_id": 0})
-    
+    ikigai_ref = db.collection('ikigai_profiles').document(user.user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    ikigai = _doc_to_dict(ikigai_doc)
+
     user_dict = user.model_dump()
     user_dict["ikigai"] = ikigai
-    
+
     return user_dict
 
 @api_router.post("/auth/logout")
 async def logout(request: Request, response: Response):
     """Logout user"""
     session_token = request.cookies.get("session_token")
-    
+
     if session_token:
-        await db.user_sessions.delete_one({"session_token": session_token})
-    
+        session_ref = db.collection('user_sessions').document(session_token)
+        await run_sync(session_ref.delete)
+
     response.delete_cookie(key="session_token", path="/")
-    
+
     return {"message": "Logged out"}
 
 # ==================== USER ENDPOINTS ====================
@@ -349,19 +381,27 @@ async def logout(request: Request, response: Response):
 @api_router.get("/users/profile/{user_id}")
 async def get_user_profile(user_id: str):
     """Get public user profile"""
-    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
-    
-    if not user_doc:
+    user_ref = db.collection('users').document(user_id)
+    user_doc = await run_sync(user_ref.get)
+    user_data = _doc_to_dict(user_doc)
+
+    if not user_data:
         raise HTTPException(status_code=404, detail="User not found")
-    
+
     # Get ikigai
-    ikigai = await db.ikigai_profiles.find_one({"user_id": user_id}, {"_id": 0})
-    
+    ikigai_ref = db.collection('ikigai_profiles').document(user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    ikigai = _doc_to_dict(ikigai_doc)
+
     # Get ratings
-    ratings = await db.ratings.find({"rated_user_id": user_id}, {"_id": 0}).to_list(100)
-    
+    def _get_ratings():
+        docs = db.collection('ratings').where('rated_user_id', '==', user_id).limit(100).get()
+        return [d.to_dict() for d in docs]
+
+    ratings = await run_sync(_get_ratings)
+
     return {
-        "user": user_doc,
+        "user": user_data,
         "ikigai": ikigai,
         "ratings": ratings
     }
@@ -370,30 +410,36 @@ async def get_user_profile(user_id: str):
 async def update_profile(updates: UserUpdate, user: User = Depends(get_current_user)):
     """Update user profile"""
     update_dict = {k: v for k, v in updates.model_dump().items() if v is not None}
-    
+
     if update_dict:
-        await db.users.update_one(
-            {"user_id": user.user_id},
-            {"$set": update_dict}
-        )
-    
-    user_doc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
-    return user_doc
+        user_ref = db.collection('users').document(user.user_id)
+        await run_sync(user_ref.update, update_dict)
+
+    user_ref = db.collection('users').document(user.user_id)
+    user_doc = await run_sync(user_ref.get)
+    return _doc_to_dict(user_doc)
 
 @api_router.get("/users/leaderboard")
 async def get_leaderboard(view: str = "peer", limit: int = 20):
     """Get leaderboard by peer or recruiter score"""
     sort_field = "peer_score" if view == "peer" else "recruiter_score"
-    
-    users = await db.users.find(
-        {"onboarding_completed": True},
-        {"_id": 0}
-    ).sort(sort_field, -1).limit(limit).to_list(limit)
-    
+
+    def _query():
+        docs = (
+            db.collection('users')
+            .where('onboarding_completed', '==', True)
+            .order_by(sort_field, direction=firestore.Query.DESCENDING)
+            .limit(limit)
+            .get()
+        )
+        return [d.to_dict() for d in docs]
+
+    users = await run_sync(_query)
+
     # Add rank
     for i, u in enumerate(users):
         u["rank"] = i + 1
-    
+
     return users
 
 # ==================== IKIGAI ENDPOINTS ====================
@@ -401,22 +447,20 @@ async def get_leaderboard(view: str = "peer", limit: int = 20):
 @api_router.post("/ikigai")
 async def create_or_update_ikigai(ikigai_data: IkigaiCreate, user: User = Depends(get_current_user)):
     """Create or update Ikigai profile"""
-    existing = await db.ikigai_profiles.find_one({"user_id": user.user_id}, {"_id": 0})
-    
+    ikigai_ref = db.collection('ikigai_profiles').document(user.user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    existing = _doc_to_dict(ikigai_doc)
+
     now = datetime.now(timezone.utc)
-    
+
     if existing:
         # Update
         update_dict = ikigai_data.model_dump()
         update_dict["updated_at"] = now.isoformat()
-        
-        await db.ikigai_profiles.update_one(
-            {"user_id": user.user_id},
-            {"$set": update_dict}
-        )
+        await run_sync(ikigai_ref.update, update_dict)
     else:
         # Create
-        ikigai_doc = {
+        ikigai_doc_data = {
             "ikigai_id": f"ikigai_{uuid.uuid4().hex[:12]}",
             "user_id": user.user_id,
             **ikigai_data.model_dump(),
@@ -424,31 +468,28 @@ async def create_or_update_ikigai(ikigai_data: IkigaiCreate, user: User = Depend
             "created_at": now.isoformat(),
             "updated_at": now.isoformat()
         }
-        await db.ikigai_profiles.insert_one(ikigai_doc)
-    
+        await run_sync(ikigai_ref.set, ikigai_doc_data)
+
     # Mark onboarding complete
-    await db.users.update_one(
-        {"user_id": user.user_id},
-        {"$set": {"onboarding_completed": True}}
-    )
-    
+    user_ref = db.collection('users').document(user.user_id)
+    await run_sync(user_ref.update, {"onboarding_completed": True})
+
     # Generate Ikigai statement with AI
     try:
         ikigai_statement = await generate_ikigai_statement(ikigai_data, user.name)
-        await db.ikigai_profiles.update_one(
-            {"user_id": user.user_id},
-            {"$set": {"ikigai_statement": ikigai_statement}}
-        )
+        await run_sync(ikigai_ref.update, {"ikigai_statement": ikigai_statement})
     except Exception as e:
         logger.error(f"Failed to generate Ikigai statement: {e}")
-    
-    ikigai = await db.ikigai_profiles.find_one({"user_id": user.user_id}, {"_id": 0})
-    return ikigai
+
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    return _doc_to_dict(ikigai_doc)
 
 @api_router.get("/ikigai")
 async def get_my_ikigai(user: User = Depends(get_current_user)):
     """Get current user's Ikigai profile"""
-    ikigai = await db.ikigai_profiles.find_one({"user_id": user.user_id}, {"_id": 0})
+    ikigai_ref = db.collection('ikigai_profiles').document(user.user_id)
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    ikigai = _doc_to_dict(ikigai_doc)
     return ikigai or {}
 
 # ==================== OPPORTUNITY ENDPOINTS ====================
@@ -462,15 +503,14 @@ async def create_opportunity(opp_data: OpportunityCreate, user: User = Depends(g
         creator_picture=user.picture,
         **opp_data.model_dump()
     )
-    
+
     opp_dict = opp.model_dump()
     opp_dict["created_at"] = opp_dict["created_at"].isoformat()
-    
-    # Insert and get back without _id
-    await db.opportunities.insert_one(opp_dict.copy())
-    
-    # Return clean dict (without _id that MongoDB adds)
-    return {k: v for k, v in opp_dict.items() if k != "_id"}
+
+    opp_ref = db.collection('opportunities').document(opp.opportunity_id)
+    await run_sync(opp_ref.set, opp_dict)
+
+    return opp_dict
 
 @api_router.get("/opportunities")
 async def list_opportunities(
@@ -480,78 +520,92 @@ async def list_opportunities(
     skip: int = 0
 ):
     """List opportunities with filters"""
-    query = {"status": status}
-    if type_filter:
-        query["type"] = type_filter
-    
-    opportunities = await db.opportunities.find(
-        query,
-        {"_id": 0}
-    ).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
-    
+    def _query():
+        q = db.collection('opportunities').where('status', '==', status)
+        if type_filter:
+            q = q.where('type', '==', type_filter)
+        q = q.order_by('created_at', direction=firestore.Query.DESCENDING)
+        docs = q.get()
+        all_docs = [d.to_dict() for d in docs]
+        return all_docs[skip:skip + limit]
+
+    opportunities = await run_sync(_query)
     return opportunities
 
 @api_router.get("/opportunities/{opportunity_id}")
 async def get_opportunity(opportunity_id: str):
     """Get single opportunity"""
-    opp = await db.opportunities.find_one({"opportunity_id": opportunity_id}, {"_id": 0})
-    
+    opp_ref = db.collection('opportunities').document(opportunity_id)
+    opp_doc = await run_sync(opp_ref.get)
+    opp = _doc_to_dict(opp_doc)
+
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    
+
     # Get creator's ikigai
-    creator_ikigai = await db.ikigai_profiles.find_one(
-        {"user_id": opp["creator_id"]},
-        {"_id": 0}
-    )
-    
+    ikigai_ref = db.collection('ikigai_profiles').document(opp["creator_id"])
+    ikigai_doc = await run_sync(ikigai_ref.get)
+    creator_ikigai = _doc_to_dict(ikigai_doc)
+
     opp["creator_ikigai"] = creator_ikigai
-    
+
     return opp
 
 @api_router.get("/opportunities/{opportunity_id}/candidates")
 async def get_opportunity_candidates(opportunity_id: str, user: User = Depends(get_current_user)):
     """Get ranked candidates for an opportunity"""
-    opp = await db.opportunities.find_one({"opportunity_id": opportunity_id}, {"_id": 0})
-    
+    opp_ref = db.collection('opportunities').document(opportunity_id)
+    opp_doc = await run_sync(opp_ref.get)
+    opp = _doc_to_dict(opp_doc)
+
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    
+
     if opp["creator_id"] != user.user_id:
         raise HTTPException(status_code=403, detail="Not authorized")
-    
-    # Get applications
-    applications = await db.applications.find(
-        {"opportunity_id": opportunity_id},
-        {"_id": 0}
-    ).to_list(100)
-    
+
+    def _get_applications():
+        docs = db.collection('applications').where('opportunity_id', '==', opportunity_id).limit(100).get()
+        return [d.to_dict() for d in docs]
+
+    applications = await run_sync(_get_applications)
+
     # Get AI-ranked candidates
     try:
         ranked_candidates = await rank_candidates_for_opportunity(opp, applications)
     except Exception as e:
         logger.error(f"Failed to rank candidates: {e}")
         ranked_candidates = applications
-    
+
     return ranked_candidates
 
 @api_router.post("/opportunities/{opportunity_id}/apply")
 async def apply_to_opportunity(opportunity_id: str, app_data: ApplicationCreate, user: User = Depends(get_current_user)):
     """Apply to an opportunity"""
-    opp = await db.opportunities.find_one({"opportunity_id": opportunity_id}, {"_id": 0})
-    
+    opp_ref = db.collection('opportunities').document(opportunity_id)
+    opp_doc = await run_sync(opp_ref.get)
+    opp = _doc_to_dict(opp_doc)
+
     if not opp:
         raise HTTPException(status_code=404, detail="Opportunity not found")
-    
+
     # Check if already applied
-    existing = await db.applications.find_one({
-        "opportunity_id": opportunity_id,
-        "applicant_id": user.user_id
-    })
-    
+    def _check_existing():
+        docs = (
+            db.collection('applications')
+            .where('opportunity_id', '==', opportunity_id)
+            .where('applicant_id', '==', user.user_id)
+            .limit(1)
+            .get()
+        )
+        results = list(docs)
+        return results[0].to_dict() if results else None
+
+    existing = await run_sync(_check_existing)
+
     if existing:
         raise HTTPException(status_code=400, detail="Already applied")
-    
+
     application = Application(
         opportunity_id=opportunity_id,
         applicant_id=user.user_id,
@@ -559,20 +613,20 @@ async def apply_to_opportunity(opportunity_id: str, app_data: ApplicationCreate,
         applicant_picture=user.picture,
         cover_message=app_data.cover_message
     )
-    
+
     app_dict = application.model_dump()
     app_dict["created_at"] = app_dict["created_at"].isoformat()
-    
-    await db.applications.insert_one(app_dict.copy())
-    
-    # Update applications count
-    await db.opportunities.update_one(
-        {"opportunity_id": opportunity_id},
-        {"$inc": {"applications_count": 1}}
+
+    app_ref = db.collection('applications').document(application.application_id)
+    await run_sync(app_ref.set, app_dict)
+
+    # Atomically increment applications_count
+    await run_sync(
+        opp_ref.update,
+        {"applications_count": firestore.Increment(1)}
     )
-    
-    # Return clean dict without _id
-    return {k: v for k, v in app_dict.items() if k != "_id"}
+
+    return app_dict
 
 # ==================== SEARCH ENDPOINTS ====================
 
@@ -585,21 +639,25 @@ async def search_people(search: SearchQuery, user: User = Depends(get_current_us
     except Exception as e:
         logger.error(f"Search failed: {e}")
         # Fallback to basic search
-        query = {"onboarding_completed": True}
-        if search.intent_filter:
-            query["primary_intent"] = search.intent_filter
-        if search.availability_filter:
-            query["availability"] = search.availability_filter
-        
-        users = await db.users.find(query, {"_id": 0}).limit(20).to_list(20)
-        
+        def _basic_search():
+            q = db.collection('users').where('onboarding_completed', '==', True)
+            if search.intent_filter:
+                q = q.where('primary_intent', '==', search.intent_filter)
+            if search.availability_filter:
+                q = q.where('availability', '==', search.availability_filter)
+            docs = q.limit(20).get()
+            return [d.to_dict() for d in docs]
+
+        users = await run_sync(_basic_search)
+
         # Add ikigai to each user
         for u in users:
-            ikigai = await db.ikigai_profiles.find_one({"user_id": u["user_id"]}, {"_id": 0})
-            u["ikigai"] = ikigai
+            ikigai_ref = db.collection('ikigai_profiles').document(u["user_id"])
+            ikigai_doc = await run_sync(ikigai_ref.get)
+            u["ikigai"] = _doc_to_dict(ikigai_doc)
             u["match_score"] = 0.5
             u["match_reasoning"] = "Based on profile match"
-        
+
         return users
 
 # ==================== MESSAGING ENDPOINTS ====================
@@ -607,29 +665,43 @@ async def search_people(search: SearchQuery, user: User = Depends(get_current_us
 @api_router.post("/messages")
 async def send_message(msg_data: MessageCreate, user: User = Depends(get_current_user)):
     """Send a message"""
-    receiver = await db.users.find_one({"user_id": msg_data.receiver_id}, {"_id": 0})
-    
+    receiver_ref = db.collection('users').document(msg_data.receiver_id)
+    receiver_doc = await run_sync(receiver_ref.get)
+    receiver = _doc_to_dict(receiver_doc)
+
     if not receiver:
         raise HTTPException(status_code=404, detail="Receiver not found")
-    
+
     # Find or create conversation
     participants = sorted([user.user_id, msg_data.receiver_id])
-    conv = await db.conversations.find_one({"participants": participants}, {"_id": 0})
-    
+
+    def _find_conversation():
+        docs = (
+            db.collection('conversations')
+            .where('participants', '==', participants)
+            .limit(1)
+            .get()
+        )
+        results = list(docs)
+        return results[0].to_dict() if results else None
+
+    conv = await run_sync(_find_conversation)
+
     if not conv:
-        conv = Conversation(
+        new_conv = Conversation(
             participants=participants,
             participant_names={user.user_id: user.name, msg_data.receiver_id: receiver["name"]},
             participant_pictures={user.user_id: user.picture or "", msg_data.receiver_id: receiver.get("picture", "")},
             unread_count={user.user_id: 0, msg_data.receiver_id: 0}
         )
-        conv_dict = conv.model_dump()
+        conv_dict = new_conv.model_dump()
         conv_dict["created_at"] = conv_dict["created_at"].isoformat()
         conv_dict["last_message_at"] = None
-        await db.conversations.insert_one(conv_dict.copy())
-        # Use clean dict without _id
-        conv = {k: v for k, v in conv_dict.items() if k != "_id"}
-    
+
+        conv_ref = db.collection('conversations').document(new_conv.conversation_id)
+        await run_sync(conv_ref.set, conv_dict)
+        conv = conv_dict
+
     # Create message
     message = Message(
         conversation_id=conv["conversation_id"],
@@ -638,56 +710,70 @@ async def send_message(msg_data: MessageCreate, user: User = Depends(get_current
         sender_picture=user.picture,
         content=msg_data.content
     )
-    
+
     msg_dict = message.model_dump()
     msg_dict["created_at"] = msg_dict["created_at"].isoformat()
-    
-    await db.messages.insert_one(msg_dict.copy())
-    
+
+    msg_ref = db.collection('messages').document(message.message_id)
+    await run_sync(msg_ref.set, msg_dict)
+
     # Update conversation
-    await db.conversations.update_one(
-        {"conversation_id": conv["conversation_id"]},
+    conv_ref = db.collection('conversations').document(conv["conversation_id"])
+    await run_sync(
+        conv_ref.update,
         {
-            "$set": {
-                "last_message": msg_data.content[:100],
-                "last_message_at": datetime.now(timezone.utc).isoformat()
-            },
-            "$inc": {f"unread_count.{msg_data.receiver_id}": 1}
+            "last_message": msg_data.content[:100],
+            "last_message_at": datetime.now(timezone.utc).isoformat(),
+            f"unread_count.{msg_data.receiver_id}": firestore.Increment(1)
         }
     )
-    
-    # Return clean dict without _id
-    return {k: v for k, v in msg_dict.items() if k != "_id"}
+
+    return msg_dict
 
 @api_router.get("/messages/conversations")
 async def get_conversations(user: User = Depends(get_current_user)):
     """Get user's conversations"""
-    conversations = await db.conversations.find(
-        {"participants": user.user_id},
-        {"_id": 0}
-    ).sort("last_message_at", -1).to_list(50)
-    
+    def _query():
+        docs = (
+            db.collection('conversations')
+            .where('participants', 'array_contains', user.user_id)
+            .order_by('last_message_at', direction=firestore.Query.DESCENDING)
+            .limit(50)
+            .get()
+        )
+        return [d.to_dict() for d in docs]
+
+    conversations = await run_sync(_query)
     return conversations
 
 @api_router.get("/messages/{conversation_id}")
 async def get_messages(conversation_id: str, user: User = Depends(get_current_user)):
     """Get messages in a conversation"""
-    conv = await db.conversations.find_one({"conversation_id": conversation_id}, {"_id": 0})
-    
+    conv_ref = db.collection('conversations').document(conversation_id)
+    conv_doc = await run_sync(conv_ref.get)
+    conv = _doc_to_dict(conv_doc)
+
     if not conv or user.user_id not in conv["participants"]:
         raise HTTPException(status_code=404, detail="Conversation not found")
-    
-    # Mark as read
-    await db.conversations.update_one(
-        {"conversation_id": conversation_id},
-        {"$set": {f"unread_count.{user.user_id}": 0}}
+
+    # Mark as read — zero out unread count for current user
+    await run_sync(
+        conv_ref.update,
+        {f"unread_count.{user.user_id}": 0}
     )
-    
-    messages = await db.messages.find(
-        {"conversation_id": conversation_id},
-        {"_id": 0}
-    ).sort("created_at", 1).to_list(100)
-    
+
+    def _get_messages():
+        docs = (
+            db.collection('messages')
+            .where('conversation_id', '==', conversation_id)
+            .order_by('created_at', direction=firestore.Query.ASCENDING)
+            .limit(100)
+            .get()
+        )
+        return [d.to_dict() for d in docs]
+
+    messages = await run_sync(_get_messages)
+
     return {"conversation": conv, "messages": messages}
 
 # ==================== RATING ENDPOINTS ====================
@@ -697,15 +783,17 @@ async def create_rating(rating_data: RatingCreate, user: User = Depends(get_curr
     """Create a rating for another user"""
     if rating_data.rated_user_id == user.user_id:
         raise HTTPException(status_code=400, detail="Cannot rate yourself")
-    
-    rated_user = await db.users.find_one({"user_id": rating_data.rated_user_id}, {"_id": 0})
-    
+
+    rated_user_ref = db.collection('users').document(rating_data.rated_user_id)
+    rated_user_doc = await run_sync(rated_user_ref.get)
+    rated_user = _doc_to_dict(rated_user_doc)
+
     if not rated_user:
         raise HTTPException(status_code=404, detail="User not found")
-    
-    # Determine rater type (simplified: if user has recruiter in role_labels)
+
+    # Determine rater type
     rater_type = "recruiter" if "recruiter" in [r.lower() for r in user.role_labels] else "peer"
-    
+
     rating = Rating(
         rater_id=user.user_id,
         rated_user_id=rating_data.rated_user_id,
@@ -719,21 +807,26 @@ async def create_rating(rating_data: RatingCreate, user: User = Depends(get_curr
         would_work_again=rating_data.would_work_again,
         comments=rating_data.comments
     )
-    
+
     rating_dict = rating.model_dump()
     rating_dict["created_at"] = rating_dict["created_at"].isoformat()
-    
-    await db.ratings.insert_one(rating_dict)
-    
+
+    rating_ref = db.collection('ratings').document(rating.rating_id)
+    await run_sync(rating_ref.set, rating_dict)
+
     # Update user scores
     await update_user_scores(rating_data.rated_user_id)
-    
+
     return rating_dict
 
 @api_router.get("/ratings/{user_id}")
 async def get_user_ratings(user_id: str):
     """Get all ratings for a user"""
-    ratings = await db.ratings.find({"rated_user_id": user_id}, {"_id": 0}).to_list(100)
+    def _query():
+        docs = db.collection('ratings').where('rated_user_id', '==', user_id).limit(100).get()
+        return [d.to_dict() for d in docs]
+
+    ratings = await run_sync(_query)
     return ratings
 
 # ==================== AI HELPER FUNCTIONS ====================
@@ -742,13 +835,13 @@ async def generate_ikigai_statement(ikigai: IkigaiCreate, user_name: str) -> str
     """Generate an Ikigai statement using Gemini"""
     if not EMERGENT_LLM_KEY:
         return None
-    
+
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"ikigai_{uuid.uuid4().hex[:8]}",
         system_message="You are an expert in Ikigai philosophy. Generate a concise, inspiring Ikigai statement (2-3 sentences) based on the user's responses. Be specific and personal."
     ).with_model("gemini", "gemini-3-flash-preview")
-    
+
     prompt = f"""
 Based on {user_name}'s Ikigai responses, create a personal Ikigai statement:
 
@@ -759,41 +852,44 @@ What the WORLD NEEDS: {', '.join(ikigai.what_the_world_needs) or 'Not specified'
 
 Generate a 2-3 sentence Ikigai statement that captures the intersection of these elements.
 """
-    
+
     response = await chat.send_message(UserMessage(text=prompt))
     return response
 
 async def ai_search_people(query: str, intent_filter: Optional[str], availability_filter: Optional[str]) -> List[dict]:
     """AI-powered search for people"""
-    # Get all users with ikigai
-    base_query = {"onboarding_completed": True}
-    if intent_filter:
-        base_query["primary_intent"] = intent_filter
-    if availability_filter:
-        base_query["availability"] = availability_filter
-    
-    users = await db.users.find(base_query, {"_id": 0}).to_list(100)
-    
+    def _get_users():
+        q = db.collection('users').where('onboarding_completed', '==', True)
+        if intent_filter:
+            q = q.where('primary_intent', '==', intent_filter)
+        if availability_filter:
+            q = q.where('availability', '==', availability_filter)
+        docs = q.limit(100).get()
+        return [d.to_dict() for d in docs]
+
+    users = await run_sync(_get_users)
+
     if not users:
         return []
-    
+
     # Get ikigai for each user
     user_profiles = []
     for u in users:
-        ikigai = await db.ikigai_profiles.find_one({"user_id": u["user_id"]}, {"_id": 0})
-        u["ikigai"] = ikigai
+        ikigai_ref = db.collection('ikigai_profiles').document(u["user_id"])
+        ikigai_doc = await run_sync(ikigai_ref.get)
+        u["ikigai"] = _doc_to_dict(ikigai_doc)
         user_profiles.append(u)
-    
+
     if not EMERGENT_LLM_KEY or not user_profiles:
         return user_profiles[:20]
-    
+
     # Use AI to rank
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"search_{uuid.uuid4().hex[:8]}",
         system_message="You are an expert at matching people based on their Ikigai profiles. Return JSON only."
     ).with_model("gemini", "gemini-3-flash-preview")
-    
+
     # Create profiles summary
     profiles_summary = []
     for u in user_profiles[:20]:  # Limit to 20 for context
@@ -808,7 +904,7 @@ async def ai_search_people(query: str, intent_filter: Optional[str], availabilit
             "what_im_good_at": ikigai.get("what_im_good_at", []),
             "peer_score": u.get("peer_score", 0)
         })
-    
+
     prompt = f"""
 Search query: "{query}"
 
@@ -820,20 +916,20 @@ Rank the top 10 most relevant profiles for this search. Return a JSON array with
 
 Only return the JSON array, nothing else.
 """
-    
+
     try:
         response = await chat.send_message(UserMessage(text=prompt))
         import json
-        
+
         # Extract JSON from response
         response_text = response.strip()
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
             if response_text.startswith("json"):
                 response_text = response_text[4:]
-        
+
         rankings = json.loads(response_text)
-        
+
         # Merge rankings with full user data
         ranked_users = []
         for rank in rankings:
@@ -843,7 +939,7 @@ Only return the JSON array, nothing else.
                     u["match_reasoning"] = rank.get("reasoning_summary", "")
                     ranked_users.append(u)
                     break
-        
+
         return ranked_users
     except Exception as e:
         logger.error(f"AI ranking failed: {e}")
@@ -853,28 +949,34 @@ async def rank_candidates_for_opportunity(opp: dict, applications: List[dict]) -
     """Rank candidates for an opportunity using AI"""
     if not applications:
         return []
-    
+
     if not EMERGENT_LLM_KEY:
         return applications
-    
+
     # Get full profiles for applicants
     candidates = []
     for app in applications:
-        user = await db.users.find_one({"user_id": app["applicant_id"]}, {"_id": 0})
-        ikigai = await db.ikigai_profiles.find_one({"user_id": app["applicant_id"]}, {"_id": 0})
-        if user:
+        user_ref = db.collection('users').document(app["applicant_id"])
+        user_doc = await run_sync(user_ref.get)
+        user_data = _doc_to_dict(user_doc)
+
+        ikigai_ref = db.collection('ikigai_profiles').document(app["applicant_id"])
+        ikigai_doc = await run_sync(ikigai_ref.get)
+        ikigai_data = _doc_to_dict(ikigai_doc)
+
+        if user_data:
             candidates.append({
                 "application": app,
-                "user": user,
-                "ikigai": ikigai
+                "user": user_data,
+                "ikigai": ikigai_data
             })
-    
+
     chat = LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=f"rank_{uuid.uuid4().hex[:8]}",
         system_message="You are an expert at matching candidates to opportunities. Return JSON only."
     ).with_model("gemini", "gemini-3-flash-preview")
-    
+
     prompt = f"""
 Opportunity:
 - Title: {opp['title']}
@@ -894,19 +996,19 @@ Candidates:
 Rank all candidates by fit. Return JSON array:
 [{{"applicant_id": "...", "match_score": 0.0-1.0, "reasoning_summary": "...", "highlighted_overlap": ["..."]}}]
 """
-    
+
     try:
         response = await chat.send_message(UserMessage(text=prompt))
         import json
-        
+
         response_text = response.strip()
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
             if response_text.startswith("json"):
                 response_text = response_text[4:]
-        
+
         rankings = json.loads(response_text)
-        
+
         # Merge with applications
         ranked = []
         for rank in rankings:
@@ -920,7 +1022,7 @@ Rank all candidates by fit. Return JSON array:
                     result["highlighted_overlap"] = rank.get("highlighted_overlap", [])
                     ranked.append(result)
                     break
-        
+
         return ranked
     except Exception as e:
         logger.error(f"Candidate ranking failed: {e}")
@@ -928,18 +1030,22 @@ Rank all candidates by fit. Return JSON array:
 
 async def update_user_scores(user_id: str):
     """Update user's peer and recruiter scores based on ratings"""
-    ratings = await db.ratings.find({"rated_user_id": user_id}, {"_id": 0}).to_list(100)
-    
+    def _get_ratings():
+        docs = db.collection('ratings').where('rated_user_id', '==', user_id).limit(100).get()
+        return [d.to_dict() for d in docs]
+
+    ratings = await run_sync(_get_ratings)
+
     if not ratings:
         return
-    
+
     peer_ratings = [r for r in ratings if r["rater_type"] == "peer"]
     recruiter_ratings = [r for r in ratings if r["rater_type"] == "recruiter"]
-    
+
     def calc_score(rating_list: List[dict], weights: dict) -> float:
         if not rating_list:
             return 0.0
-        
+
         total = 0
         for r in rating_list:
             score = sum([
@@ -950,9 +1056,9 @@ async def update_user_scores(user_id: str):
                 r["professionalism"] * weights.get("professionalism", 1)
             ])
             total += score / sum(weights.values())
-        
+
         return round(total / len(rating_list), 1)
-    
+
     # Peer score weights: emphasize collaboration, culture fit, skill
     peer_score = calc_score(peer_ratings, {
         "collaboration": 1.5,
@@ -961,7 +1067,7 @@ async def update_user_scores(user_id: str):
         "culture_fit": 1.5,
         "professionalism": 0.5
     })
-    
+
     # Recruiter score weights: emphasize reliability, professionalism, skill
     recruiter_score = calc_score(recruiter_ratings, {
         "collaboration": 0.5,
@@ -970,11 +1076,9 @@ async def update_user_scores(user_id: str):
         "culture_fit": 0.5,
         "professionalism": 1.5
     }) if recruiter_ratings else peer_score * 0.8
-    
-    await db.users.update_one(
-        {"user_id": user_id},
-        {"$set": {"peer_score": peer_score, "recruiter_score": recruiter_score}}
-    )
+
+    user_ref = db.collection('users').document(user_id)
+    await run_sync(user_ref.update, {"peer_score": peer_score, "recruiter_score": recruiter_score})
 
 # ==================== BASIC ENDPOINTS ====================
 
@@ -996,7 +1100,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
