@@ -13,6 +13,7 @@ import CreateOpportunity from "./pages/CreateOpportunity";
 import Messaging from "./pages/Messaging";
 import Leaderboard from "./pages/Leaderboard";
 import Settings from "./pages/Settings";
+import LinkedInCallback from "./pages/LinkedInCallback";
 
 // Context
 import { AuthProvider, useAuth } from "./context/AuthContext";
@@ -167,6 +168,7 @@ const AppRouter = () => {
           </ProtectedRoute>
         }
       />
+      <Route path="/auth/linkedin/callback" element={<LinkedInCallback />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

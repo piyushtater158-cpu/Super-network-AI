@@ -92,6 +92,8 @@ export default function IkigaiOnboarding() {
   const { user, updateUser } = useAuth();
   const [currentStep, setCurrentStep] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [isScanningLinkedIn, setIsScanningLinkedIn] = useState(false);
+  const [linkedInUrl, setLinkedInUrl] = useState("");
   const [inputValue, setInputValue] = useState("");
   const [formData, setFormData] = useState({
     what_i_love: [],
@@ -157,6 +159,31 @@ export default function IkigaiOnboarding() {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  const handleLinkedInScan = async () => {
+    if (!linkedInUrl.trim()) {
+      toast.error("Please enter a LinkedIn URL");
+      return;
+    }
+
+    setIsScanningLinkedIn(true);
+    try {
+      const res = await axios.post(`${API}/users/scan-linkedin`,
+        { linkedin_url: linkedInUrl.trim() },
+        { withCredentials: true }
+      );
+      toast.success("LinkedIn profile scanned successfully!");
+
+      // Re-use the identical populator logic from the CV parser
+      await handleCVParsed(res.data);
+      setLinkedInUrl(""); // Reset
+    } catch (error) {
+      console.error("LinkedIn scan failed:", error);
+      toast.error("Failed to scan LinkedIn URL. Please try again.");
+    } finally {
+      setIsScanningLinkedIn(false);
     }
   };
 
@@ -376,9 +403,51 @@ export default function IkigaiOnboarding() {
               </div>
             </div>
 
-            {/* CV Uploader (Step 1 only) */}
+            {/* AI Auto-Fill Section (Step 1 only) */}
             {currentStep === 0 && (
-              <CVUploader onParsedData={handleCVParsed} />
+              <div className="mb-6 space-y-4">
+                <p className="text-xs text-slate-500 uppercase tracking-widest">
+                  Auto-fill your profile with AI
+                </p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <CVUploader onParsedData={handleCVParsed} />
+
+                  <div className="w-full glass-light rounded-2xl p-6 border-2 border-white/10 hover:border-white/20 transition-all flex flex-col justify-center gap-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
+                        <Globe className="w-5 h-5 text-blue-400" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-white">Scan LinkedIn</p>
+                        <p className="text-[10px] text-slate-400">Paste your public URL</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 mt-2">
+                      <Input
+                        value={linkedInUrl}
+                        onChange={(e) => setLinkedInUrl(e.target.value)}
+                        placeholder="https://linkedin.com/in/..."
+                        className="h-9 text-xs bg-black/40 border-white/10 text-white"
+                      />
+                      <Button
+                        onClick={handleLinkedInScan}
+                        disabled={isScanningLinkedIn || !linkedInUrl.trim()}
+                        className="h-9 px-3 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs"
+                      >
+                        {isScanningLinkedIn ? (
+                          <motion.div
+                            className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full mr-1"
+                            animate={{ rotate: 360 }}
+                            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                          />
+                        ) : <Sparkles size={12} className="mr-1" />}
+                        Scan
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* Input */}

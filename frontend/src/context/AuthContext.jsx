@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
-import { signInWithPopup, signOut } from "firebase/auth";
+import { signInWithPopup, signOut, signInWithCustomToken } from "firebase/auth";
 import { auth, googleProvider } from "../firebase";
 import axios from "axios";
 
@@ -63,6 +63,36 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
+  const loginWithLinkedIn = useCallback(async (customToken) => {
+    try {
+      // 1. Sign into Firebase using the custom token minted by our backend
+      await signInWithCustomToken(auth, customToken);
+
+      // 2. We need the standard Firebase ID token to establish our app session cookie
+      const idToken = await auth.currentUser.getIdToken();
+
+      // 3. Exchange Firebase ID token for our session cookie (same as Google flow)
+      const response = await axios.post(
+        `${API}/auth/session`,
+        { id_token: idToken },
+        { withCredentials: true }
+      );
+
+      const userData = response.data.user;
+      setUser(userData);
+
+      // 4. Redirect based on onboarding status
+      if (userData.onboarding_completed) {
+        window.location.href = "/dashboard";
+      } else {
+        window.location.href = "/onboarding";
+      }
+    } catch (error) {
+      console.error("LinkedIn Custom Token Login error:", error);
+      throw error;
+    }
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
@@ -92,6 +122,7 @@ export const AuthProvider = ({ children }) => {
         user,
         loading,
         login,
+        loginWithLinkedIn,
         logout,
         checkAuth,
         updateUser,

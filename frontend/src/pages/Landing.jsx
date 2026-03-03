@@ -3,11 +3,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/ui/button";
 import { FloatingParticles, GradientOrbs, MissionPulse } from "../components/3d/CrystalComponents";
-import { 
-  Sparkles, 
-  Users, 
-  Briefcase, 
-  Target, 
+import {
+  Sparkles,
+  Users,
+  Briefcase,
+  Target,
   ArrowRight,
   Star,
   Zap,
@@ -15,18 +15,19 @@ import {
   ChevronDown,
   Play,
   CheckCircle,
+  Linkedin,
 } from "lucide-react";
 
 // Animated number counter
 const AnimatedCounter = ({ value, suffix = "" }) => {
   const [count, setCount] = useState(0);
-  
+
   useEffect(() => {
     const duration = 2000;
     const steps = 60;
     const increment = value / steps;
     let current = 0;
-    
+
     const timer = setInterval(() => {
       current += increment;
       if (current >= value) {
@@ -36,10 +37,10 @@ const AnimatedCounter = ({ value, suffix = "" }) => {
         setCount(Math.floor(current));
       }
     }, duration / steps);
-    
+
     return () => clearInterval(timer);
   }, [value]);
-  
+
   return <span>{count}{suffix}</span>;
 };
 
@@ -96,6 +97,20 @@ export default function Landing() {
   const { login, user } = useAuth();
   const [scrolled, setScrolled] = useState(false);
 
+  // Send the user to LinkedIn's official OAuth page to get a code
+  const startLinkedInAuth = () => {
+    const clientId = process.env.REACT_APP_LINKEDIN_CLIENT_ID;
+    const redirectUri = `${window.location.origin}/auth/linkedin/callback`;
+    const state = Math.random().toString(36).substring(7); // simple CSRF protection for OAuth
+
+    // Scopes needed to get email and profile picture
+    const scope = "openid profile email";
+
+    const linkedInAuthUrl = `https://www.linkedin.com/oauth/v2/authorization?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}&scope=${encodeURIComponent(scope)}`;
+
+    window.location.href = linkedInAuthUrl;
+  };
+
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 50);
     window.addEventListener("scroll", handleScroll);
@@ -114,7 +129,7 @@ export default function Landing() {
       <GradientOrbs />
 
       {/* Grid pattern */}
-      <div 
+      <div
         className="fixed inset-0 opacity-30 pointer-events-none"
         style={{
           backgroundImage: `
@@ -126,16 +141,15 @@ export default function Landing() {
       />
 
       {/* Header */}
-      <motion.header 
-        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${
-          scrolled ? "bg-black/80 backdrop-blur-xl border-b border-white/10" : ""
-        }`}
+      <motion.header
+        className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? "bg-black/80 backdrop-blur-xl border-b border-white/10" : ""
+          }`}
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ duration: 0.5 }}
       >
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <motion.div 
+          <motion.div
             className="flex items-center gap-3"
             whileHover={{ scale: 1.02 }}
           >
@@ -146,14 +160,21 @@ export default function Landing() {
               SuperNetwork<span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-cyan-400">AI</span>
             </span>
           </motion.div>
-          
-          <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+
+          <motion.div className="flex items-center gap-3" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
             <Button
               onClick={login}
               className="bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-full px-6 py-2.5 backdrop-blur-sm font-medium"
               data-testid="header-login-btn"
             >
               Sign In
+            </Button>
+            <Button
+              onClick={startLinkedInAuth}
+              className="bg-[#0A66C2]/10 hover:bg-[#0A66C2]/20 text-white border border-[#0A66C2]/50 rounded-full p-2.5 backdrop-blur-sm"
+              title="Sign in with LinkedIn"
+            >
+              <Linkedin size={20} className="text-[#0A66C2]" />
             </Button>
           </motion.div>
         </div>
@@ -163,7 +184,7 @@ export default function Landing() {
       <section className="relative min-h-screen flex items-center justify-center px-6 pt-20">
         <div className="max-w-6xl mx-auto text-center relative z-10">
           {/* Badge */}
-          <motion.div 
+          <motion.div
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-violet-500/10 border border-violet-500/30 mb-8"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -174,7 +195,7 @@ export default function Landing() {
           </motion.div>
 
           {/* Headline */}
-          <motion.h1 
+          <motion.h1
             className="text-5xl md:text-7xl lg:text-8xl font-black text-white mb-6 leading-[1.05] tracking-tight"
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -192,18 +213,18 @@ export default function Landing() {
           </motion.h1>
 
           {/* Subheadline */}
-          <motion.p 
+          <motion.p
             className="text-xl md:text-2xl text-slate-400 max-w-3xl mx-auto mb-12 leading-relaxed"
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
           >
-            AI-powered matching that connects you with cofounders, teams, gigs, and jobs 
+            AI-powered matching that connects you with cofounders, teams, gigs, and jobs
             based on your <span className="text-white font-medium">passions</span>, <span className="text-white font-medium">skills</span>, and <span className="text-white font-medium">purpose</span>.
           </motion.p>
 
           {/* CTA Buttons */}
-          <motion.div 
+          <motion.div
             className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-16"
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
@@ -221,8 +242,17 @@ export default function Landing() {
             </motion.div>
             <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
               <Button
+                onClick={startLinkedInAuth}
+                className="bg-[#0A66C2] text-white hover:bg-[#004182] rounded-full px-10 py-7 text-lg font-bold shadow-2xl shadow-[#0A66C2]/30 flex items-center gap-3"
+              >
+                <Linkedin size={22} />
+                Sign in with LinkedIn
+              </Button>
+            </motion.div>
+            <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
+              <Button
                 variant="outline"
-                className="bg-white/5 border-white/20 text-white hover:bg-white/10 rounded-full px-10 py-7 text-lg font-medium flex items-center gap-3"
+                className="bg-white/5 border-white/20 text-white hover:bg-white/10 rounded-full px-10 py-7 text-lg font-medium flex items-center gap-3 hidden md:flex"
                 data-testid="hero-watch-demo-btn"
               >
                 <Play size={20} fill="currentColor" />
@@ -264,7 +294,7 @@ export default function Landing() {
       {/* Features Section */}
       <section className="relative py-32 px-6">
         <div className="max-w-7xl mx-auto">
-          <motion.div 
+          <motion.div
             className="text-center mb-20"
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -308,7 +338,7 @@ export default function Landing() {
       {/* Stats Section */}
       <section className="relative py-24 px-6">
         <div className="max-w-6xl mx-auto">
-          <motion.div 
+          <motion.div
             className="rounded-[2rem] p-12 md:p-16 relative overflow-hidden"
             style={{
               background: "linear-gradient(135deg, rgba(139, 92, 246, 0.1) 0%, rgba(6, 182, 212, 0.1) 100%)",
@@ -352,7 +382,7 @@ export default function Landing() {
       {/* How It Works */}
       <section className="relative py-32 px-6">
         <div className="max-w-6xl mx-auto">
-          <motion.div 
+          <motion.div
             className="text-center mb-20"
             initial={{ opacity: 0, y: 30 }}
             whileInView={{ opacity: 1, y: 0 }}
@@ -409,7 +439,7 @@ export default function Landing() {
               <Star className="w-12 h-12 text-violet-400 mb-6" />
               <h3 className="text-2xl font-bold text-white mb-4">Gen Z Talent</h3>
               <p className="text-slate-400 mb-6">
-                Translate your passions and skills into real opportunities. 
+                Translate your passions and skills into real opportunities.
                 Find gigs, jobs, or cofounders that align with your purpose.
               </p>
               <ul className="space-y-3">
@@ -436,7 +466,7 @@ export default function Landing() {
               <Briefcase className="w-12 h-12 text-cyan-400 mb-6" />
               <h3 className="text-2xl font-bold text-white mb-4">Founders & Recruiters</h3>
               <p className="text-slate-400 mb-6">
-                Discover high-potential talent with better signal than generic job boards. 
+                Discover high-potential talent with better signal than generic job boards.
                 See Ikigai alignment and multi-dimensional ratings.
               </p>
               <ul className="space-y-3">
@@ -477,7 +507,7 @@ export default function Landing() {
               Ready to Find Your Ikigai?
             </h2>
             <p className="text-xl text-slate-300 mb-10 max-w-2xl mx-auto">
-              Join the AI-native networking layer connecting passionate talent 
+              Join the AI-native networking layer connecting passionate talent
               with meaningful opportunities.
             </p>
             <motion.div whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}>
