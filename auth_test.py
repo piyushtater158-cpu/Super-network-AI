@@ -3,8 +3,8 @@ import sys
 
 def test_auth_endpoints():
     """Test authenticated endpoints with test session"""
-    base_url = "https://supernetwork-ai.preview.emergentagent.com/api"
-    session_token = "test_session_1772443281068"
+    base_url = "http://localhost:8001/api"
+    session_token = "test_session_token"
     
     headers = {
         'Authorization': f'Bearer {session_token}',
@@ -32,7 +32,9 @@ def test_auth_endpoints():
     if response.status_code == 200:
         ikigai = response.json()
         print(f"✅ Ikigai retrieved")
-        print(f"   Statement: {ikigai.get('ikigai_statement', 'None')[:100]}...")
+        statement = ikigai.get('ikigai_statement', 'None')
+        if statement:
+            print(f"   Statement: {statement[:100]}...")
     else:
         print(f"❌ Ikigai fetch failed: {response.text}")
     

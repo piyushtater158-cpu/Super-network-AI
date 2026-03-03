@@ -10,10 +10,10 @@ from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
-import httpx
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+import google.generativeai as genai
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth as firebase_auth
+import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -24,8 +24,10 @@ cred = credentials.Certificate(str(_cred_path))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# Emergent LLM Key for Gemini
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+# Gemini API Key
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # Create the main app
 app = FastAPI()
@@ -258,29 +260,27 @@ async def get_current_user(request: Request) -> User:
 
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
-    """Exchange session_id for session_token"""
+    """Exchange Firebase ID token for a session token"""
     body = await request.json()
-    session_id = body.get("session_id")
+    id_token = body.get("id_token")
 
-    if not session_id:
-        raise HTTPException(status_code=400, detail="session_id required")
+    if not id_token:
+        raise HTTPException(status_code=400, detail="id_token required")
 
-    # Call Emergent Auth to get user data
-    async with httpx.AsyncClient() as client_http:
-        auth_response = await client_http.get(
-            "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-            headers={"X-Session-ID": session_id}
-        )
+    # Verify the Firebase ID token
+    try:
+        def _verify():
+            return firebase_auth.verify_id_token(id_token)
+        decoded_token = await run_sync(_verify)
+    except Exception as e:
+        logger.error(f"Firebase token verification failed: {e}")
+        raise HTTPException(status_code=401, detail="Invalid or expired ID token")
 
-        if auth_response.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid session_id")
-
-        auth_data = auth_response.json()
-
-    email = auth_data.get("email")
-    name = auth_data.get("name")
-    picture = auth_data.get("picture")
-    session_token = auth_data.get("session_token")
+    email = decoded_token.get("email")
+    name = decoded_token.get("name", email)
+    picture = decoded_token.get("picture")
+    # Use the Firebase UID as the session token (stable, unique per user)
+    session_token = decoded_token.get("uid")
 
     # Check if user exists (query by email)
     def _find_user_by_email():
@@ -833,16 +833,11 @@ async def get_user_ratings(user_id: str):
 
 async def generate_ikigai_statement(ikigai: IkigaiCreate, user_name: str) -> str:
     """Generate an Ikigai statement using Gemini"""
-    if not EMERGENT_LLM_KEY:
+    if not GEMINI_API_KEY:
         return None
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"ikigai_{uuid.uuid4().hex[:8]}",
-        system_message="You are an expert in Ikigai philosophy. Generate a concise, inspiring Ikigai statement (2-3 sentences) based on the user's responses. Be specific and personal."
-    ).with_model("gemini", "gemini-3-flash-preview")
+    prompt = f"""You are an expert in Ikigai philosophy. Generate a concise, inspiring Ikigai statement (2-3 sentences) based on the user's responses. Be specific and personal.
 
-    prompt = f"""
 Based on {user_name}'s Ikigai responses, create a personal Ikigai statement:
 
 What they LOVE: {', '.join(ikigai.what_i_love) or 'Not specified'}
@@ -850,11 +845,11 @@ What they're GOOD AT: {', '.join(ikigai.what_im_good_at) or 'Not specified'}
 What they can be PAID FOR: {', '.join(ikigai.what_i_can_be_paid_for) or 'Not specified'}
 What the WORLD NEEDS: {', '.join(ikigai.what_the_world_needs) or 'Not specified'}
 
-Generate a 2-3 sentence Ikigai statement that captures the intersection of these elements.
-"""
+Generate a 2-3 sentence Ikigai statement that captures the intersection of these elements."""
 
-    response = await chat.send_message(UserMessage(text=prompt))
-    return response
+    model = genai.GenerativeModel("gemini-1.5-flash")
+    response = await run_sync(model.generate_content, prompt)
+    return response.text
 
 async def ai_search_people(query: str, intent_filter: Optional[str], availability_filter: Optional[str]) -> List[dict]:
     """AI-powered search for people"""
@@ -880,15 +875,8 @@ async def ai_search_people(query: str, intent_filter: Optional[str], availabilit
         u["ikigai"] = _doc_to_dict(ikigai_doc)
         user_profiles.append(u)
 
-    if not EMERGENT_LLM_KEY or not user_profiles:
+    if not GEMINI_API_KEY or not user_profiles:
         return user_profiles[:20]
-
-    # Use AI to rank
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"search_{uuid.uuid4().hex[:8]}",
-        system_message="You are an expert at matching people based on their Ikigai profiles. Return JSON only."
-    ).with_model("gemini", "gemini-3-flash-preview")
 
     # Create profiles summary
     profiles_summary = []
@@ -905,7 +893,8 @@ async def ai_search_people(query: str, intent_filter: Optional[str], availabilit
             "peer_score": u.get("peer_score", 0)
         })
 
-    prompt = f"""
+    prompt = f"""You are an expert at matching people based on their Ikigai profiles. Return JSON only.
+
 Search query: "{query}"
 
 Available profiles:
@@ -914,15 +903,12 @@ Available profiles:
 Rank the top 10 most relevant profiles for this search. Return a JSON array with:
 [{{"user_id": "...", "match_score": 0.0-1.0, "reasoning_summary": "..."}}]
 
-Only return the JSON array, nothing else.
-"""
+Only return the JSON array, nothing else."""
 
     try:
-        response = await chat.send_message(UserMessage(text=prompt))
-        import json
-
-        # Extract JSON from response
-        response_text = response.strip()
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = await run_sync(model.generate_content, prompt)
+        response_text = response.text.strip()
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
             if response_text.startswith("json"):
@@ -950,7 +936,7 @@ async def rank_candidates_for_opportunity(opp: dict, applications: List[dict]) -
     if not applications:
         return []
 
-    if not EMERGENT_LLM_KEY:
+    if not GEMINI_API_KEY:
         return applications
 
     # Get full profiles for applicants
@@ -971,13 +957,8 @@ async def rank_candidates_for_opportunity(opp: dict, applications: List[dict]) -
                 "ikigai": ikigai_data
             })
 
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"rank_{uuid.uuid4().hex[:8]}",
-        system_message="You are an expert at matching candidates to opportunities. Return JSON only."
-    ).with_model("gemini", "gemini-3-flash-preview")
+    prompt = f"""You are an expert at matching candidates to opportunities. Return JSON only.
 
-    prompt = f"""
 Opportunity:
 - Title: {opp['title']}
 - Type: {opp['type']}
@@ -994,14 +975,13 @@ Candidates:
 } for c in candidates]}
 
 Rank all candidates by fit. Return JSON array:
-[{{"applicant_id": "...", "match_score": 0.0-1.0, "reasoning_summary": "...", "highlighted_overlap": ["..."]}}]
-"""
+[{{"applicant_id": "...", "match_score": 0.0-1.0, "reasoning_summary": "...", "highlighted_overlap": ["..."]}}]"""
 
     try:
-        response = await chat.send_message(UserMessage(text=prompt))
-        import json
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        response = await run_sync(model.generate_content, prompt)
 
-        response_text = response.strip()
+        response_text = response.text.strip()
         if response_text.startswith("```"):
             response_text = response_text.split("```")[1]
             if response_text.startswith("json"):

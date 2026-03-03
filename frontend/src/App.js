@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, useLocation, Navigate, useNavigate } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 
 // Pages
 import Landing from "./pages/Landing";
-import AuthCallback from "./pages/AuthCallback";
 import Dashboard from "./pages/Dashboard";
 import IkigaiOnboarding from "./pages/IkigaiOnboarding";
 import Profile from "./pages/Profile";
@@ -31,7 +30,7 @@ const ProtectedRoute = ({ children }) => {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    // If user passed from AuthCallback, skip check
+    // If user already set from login, skip check
     if (location.state?.user) {
       setChecked(true);
       return;
@@ -76,16 +75,7 @@ const OnboardingCheck = ({ children }) => {
   return children;
 };
 
-// App Router with session_id detection
 const AppRouter = () => {
-  const location = useLocation();
-
-  // Check URL fragment for session_id synchronously during render
-  // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-  if (location.hash?.includes("session_id=")) {
-    return <AuthCallback />;
-  }
-
   return (
     <Routes>
       <Route path="/" element={<Landing />} />

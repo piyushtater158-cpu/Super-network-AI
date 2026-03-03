@@ -1,4 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
+import { signInWithPopup, signOut } from "firebase/auth";
+import { auth, googleProvider } from "../firebase";
 import axios from "axios";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
@@ -19,13 +21,6 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const checkAuth = useCallback(async () => {
-    // CRITICAL: If returning from OAuth callback, skip the /me check.
-    // AuthCallback will exchange the session_id and establish the session first.
-    if (window.location.hash?.includes("session_id=")) {
-      setLoading(false);
-      return false;
-    }
-
     try {
       const response = await axios.get(`${API}/auth/me`, {
         withCredentials: true,
@@ -40,10 +35,32 @@ export const AuthProvider = ({ children }) => {
     }
   }, []);
 
-  const login = useCallback(() => {
-    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
-    const redirectUrl = window.location.origin + "/dashboard";
-    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  const login = useCallback(async () => {
+    try {
+      // 1. Google Sign-In popup via Firebase Auth
+      const result = await signInWithPopup(auth, googleProvider);
+      const idToken = await result.user.getIdToken();
+
+      // 2. Exchange Firebase ID token for our session cookie
+      const response = await axios.post(
+        `${API}/auth/session`,
+        { id_token: idToken },
+        { withCredentials: true }
+      );
+
+      const userData = response.data.user;
+      setUser(userData);
+
+      // 3. Redirect based on onboarding status
+      if (userData.onboarding_completed) {
+        window.location.href = "/dashboard";
+      } else {
+        window.location.href = "/onboarding";
+      }
+    } catch (error) {
+      console.error("Login error:", error);
+      throw error;
+    }
   }, []);
 
   const logout = useCallback(async () => {
@@ -51,6 +68,11 @@ export const AuthProvider = ({ children }) => {
       await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
     } catch (error) {
       console.error("Logout error:", error);
+    }
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error("Firebase signOut error:", error);
     }
     setUser(null);
     window.location.href = "/";
